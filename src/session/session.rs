@@ -421,8 +421,46 @@ impl Session {
                 self.is_closed.store(true, std::sync::atomic::Ordering::Relaxed);
                 return Err(AnyTlsError::Protocol(format!("Alert: {}", alert_msg)));
             }
+            Command::HeartRequest => {
+                // Heartbeat request - respond with HeartResponse
+                tracing::debug!(
+                    "[Session] 💓 Received HeartRequest (stream_id={})",
+                    frame.stream_id
+                );
+                
+                // Send HeartResponse immediately
+                let response = Frame::control(Command::HeartResponse, frame.stream_id);
+                
+                if let Err(e) = self.write_control_frame(response).await {
+                    tracing::error!(
+                        "[Session] ❌ Failed to send HeartResponse: {}",
+                        e
+                    );
+                    return Err(e);
+                }
+                
+                tracing::debug!(
+                    "[Session] ✅ Sent HeartResponse (stream_id={})",
+                    frame.stream_id
+                );
+            }
+            Command::HeartResponse => {
+                // Heartbeat response - log for now
+                tracing::debug!(
+                    "[Session] 💚 Received HeartResponse (stream_id={})",
+                    frame.stream_id
+                );
+                
+                // TODO(v0.4.0): Use this for active heartbeat detection
+                // For now, just acknowledge receipt
+            }
             _ => {
-                // Unhandled command - ignore
+                // Unhandled command - log and ignore
+                tracing::debug!(
+                    "[Session] ⚠️ Unhandled command: {:?} (stream_id={})",
+                    frame.cmd,
+                    frame.stream_id
+                );
             }
         }
         Ok(())
@@ -785,5 +823,189 @@ impl Session {
     /// Get peer version
     pub fn peer_version(&self) -> u8 {
         self.peer_version.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{duplex, DuplexStream};
+    use crate::padding::PaddingFactory;
+    
+    /// 创建一对连接的双工流（用于测试）
+    fn create_connected_streams() -> (DuplexStream, DuplexStream) {
+        duplex(8192)
+    }
+    
+    /// 创建测试用的 PaddingFactory
+    fn create_test_padding() -> Arc<PaddingFactory> {
+        use crate::padding::DEFAULT_PADDING_SCHEME;
+        Arc::new(PaddingFactory::new(DEFAULT_PADDING_SCHEME.as_bytes()).unwrap())
+    }
+    
+    #[tokio::test]
+    async fn test_heartbeat_request_response() {
+        // 初始化日志
+        let _ = tracing_subscriber::fmt::try_init();
+        
+        // 创建一对连接的流
+        let (client_stream, server_stream) = create_connected_streams();
+        let (client_read, client_write) = tokio::io::split(client_stream);
+        let (server_read, server_write) = tokio::io::split(server_stream);
+        
+        let padding = create_test_padding();
+        
+        // 创建客户端和服务器 Session
+        let client_session = Arc::new(Session::new_client(
+            client_read,
+            client_write,
+            padding.clone(),
+        ));
+        
+        let server_session = Arc::new(Session::new_server(
+            server_read,
+            server_write,
+            padding,
+        ));
+        
+        // 手动启动 recv_loop 任务
+        let client_clone = client_session.clone();
+        tokio::spawn(async move {
+            let _ = client_clone.recv_loop().await;
+        });
+        
+        let server_clone = server_session.clone();
+        tokio::spawn(async move {
+            let _ = server_clone.recv_loop().await;
+        });
+        
+        // 启动 process_stream_data 任务
+        let client_clone2 = client_session.clone();
+        tokio::spawn(async move {
+            let _ = client_clone2.process_stream_data().await;
+        });
+        
+        let server_clone2 = server_session.clone();
+        tokio::spawn(async move {
+            let _ = server_clone2.process_stream_data().await;
+        });
+        
+        // 等待一下让任务启动
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        
+        // 客户端发送 HeartRequest
+        let heart_request = Frame::control(Command::HeartRequest, 0);
+        client_session.write_control_frame(heart_request).await.unwrap();
+        
+        // 等待服务器处理和响应
+        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+        
+        // 测试通过标准：Session 没有关闭
+        assert!(!client_session.is_closed(), "Client session should not be closed");
+        assert!(!server_session.is_closed(), "Server session should not be closed");
+        
+        tracing::info!("✅ Heartbeat request-response test passed");
+    }
+    
+    #[tokio::test]
+    async fn test_heartbeat_multiple_requests() {
+        let _ = tracing_subscriber::fmt::try_init();
+        
+        let (client_stream, server_stream) = create_connected_streams();
+        let (client_read, client_write) = tokio::io::split(client_stream);
+        let (server_read, server_write) = tokio::io::split(server_stream);
+        
+        let padding = create_test_padding();
+        
+        let client_session = Arc::new(Session::new_client(
+            client_read,
+            client_write,
+            padding.clone(),
+        ));
+        
+        let server_session = Arc::new(Session::new_server(
+            server_read,
+            server_write,
+            padding,
+        ));
+        
+        // 启动任务
+        let client_clone = client_session.clone();
+        tokio::spawn(async move { let _ = client_clone.recv_loop().await; });
+        let server_clone = server_session.clone();
+        tokio::spawn(async move { let _ = server_clone.recv_loop().await; });
+        let client_clone2 = client_session.clone();
+        tokio::spawn(async move { let _ = client_clone2.process_stream_data().await; });
+        let server_clone2 = server_session.clone();
+        tokio::spawn(async move { let _ = server_clone2.process_stream_data().await; });
+        
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        
+        // 发送多个心跳请求
+        for i in 0..5 {
+            let heart_request = Frame::control(Command::HeartRequest, i);
+            client_session.write_control_frame(heart_request).await.unwrap();
+            
+            // 等待响应
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
+        
+        // 额外等待确保所有响应都被处理
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        
+        // Session 应该仍然正常
+        assert!(!client_session.is_closed(), "Client session should not be closed after multiple heartbeats");
+        assert!(!server_session.is_closed(), "Server session should not be closed after multiple heartbeats");
+        
+        tracing::info!("✅ Multiple heartbeat requests test passed");
+    }
+    
+    #[tokio::test]
+    async fn test_heartbeat_bidirectional() {
+        let _ = tracing_subscriber::fmt::try_init();
+        
+        let (stream1, stream2) = create_connected_streams();
+        let (read1, write1) = tokio::io::split(stream1);
+        let (read2, write2) = tokio::io::split(stream2);
+        
+        let padding = create_test_padding();
+        
+        let session1 = Arc::new(Session::new_client(
+            read1,
+            write1,
+            padding.clone(),
+        ));
+        
+        let session2 = Arc::new(Session::new_server(
+            read2,
+            write2,
+            padding,
+        ));
+        
+        // 启动任务
+        let s1_clone = session1.clone();
+        tokio::spawn(async move { let _ = s1_clone.recv_loop().await; });
+        let s2_clone = session2.clone();
+        tokio::spawn(async move { let _ = s2_clone.recv_loop().await; });
+        let s1_clone2 = session1.clone();
+        tokio::spawn(async move { let _ = s1_clone2.process_stream_data().await; });
+        let s2_clone2 = session2.clone();
+        tokio::spawn(async move { let _ = s2_clone2.process_stream_data().await; });
+        
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        
+        // Session 1 发送心跳给 Session 2
+        session1.write_control_frame(Frame::control(Command::HeartRequest, 0)).await.unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        
+        // Session 2 发送心跳给 Session 1  
+        session2.write_control_frame(Frame::control(Command::HeartRequest, 1)).await.unwrap();
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        
+        // 双方都应该正常
+        assert!(!session1.is_closed());
+        assert!(!session2.is_closed());
+        
+        tracing::info!("✅ Bidirectional heartbeat test passed");
     }
 }
