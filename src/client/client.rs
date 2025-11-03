@@ -19,15 +19,32 @@ pub struct Client {
 }
 
 impl Client {
-    /// Create a new client
+    /// Create a new client with default session pool configuration
     pub fn new(
         password: &str,
         server_addr: String,
         tls_config: Arc<tokio_rustls::TlsConnector>,
         padding: Arc<PaddingFactory>,
     ) -> Self {
+        Self::with_pool_config(
+            password,
+            server_addr,
+            tls_config,
+            padding,
+            crate::client::SessionPoolConfig::default(),
+        )
+    }
+    
+    /// Create a new client with custom session pool configuration
+    pub fn with_pool_config(
+        password: &str,
+        server_addr: String,
+        tls_config: Arc<tokio_rustls::TlsConnector>,
+        padding: Arc<PaddingFactory>,
+        pool_config: crate::client::SessionPoolConfig,
+    ) -> Self {
         let password_hash = hash_password(password);
-        let session_pool = Arc::new(SessionPool::new());
+        let session_pool = Arc::new(SessionPool::with_config(pool_config));
         
         tracing::debug!("[Client] Creating new client for server: {}", server_addr);
         
