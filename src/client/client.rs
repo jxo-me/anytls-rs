@@ -1,0 +1,203 @@
+//! AnyTLS Client implementation
+
+use crate::client::SessionPool;
+use crate::padding::PaddingFactory;
+use crate::session::Session;
+use crate::util::{AnyTlsError, Result, hash_password, send_authentication};
+use std::net::{Ipv4Addr, Ipv6Addr};
+use std::sync::Arc;
+use tokio::net::TcpStream;
+use tokio_rustls::rustls::pki_types::ServerName;
+
+/// Client manages connections to AnyTLS servers
+pub struct Client {
+    password_hash: [u8; 32],
+    server_addr: String,
+    tls_config: Arc<tokio_rustls::TlsConnector>,
+    padding: Arc<PaddingFactory>,
+    session_pool: Arc<SessionPool>,
+}
+
+impl Client {
+    /// Create a new client
+    pub fn new(
+        password: &str,
+        server_addr: String,
+        tls_config: Arc<tokio_rustls::TlsConnector>,
+        padding: Arc<PaddingFactory>,
+    ) -> Self {
+        let password_hash = hash_password(password);
+        let session_pool = Arc::new(SessionPool::new());
+        
+        tracing::debug!("[Client] Creating new client for server: {}", server_addr);
+        
+        Self {
+            password_hash,
+            server_addr,
+            tls_config,
+            padding,
+            session_pool,
+        }
+    }
+
+    /// Create a new stream by establishing or reusing a session
+    /// Returns (stream, session) so the caller can use session.write_data_frame for writing
+    pub async fn create_proxy_stream(&self, destination: (String, u16)) -> Result<(Arc<crate::session::Stream>, Arc<crate::session::Session>)> {
+        tracing::debug!("[Client] create_proxy_stream: {}:{}", destination.0, destination.1);
+        
+        // Get or create a session
+        let session = self.create_stream().await?;
+        tracing::debug!("[Client] Got session for proxy stream");
+        
+        // Open a new stream in the session
+        let stream = session.open_stream().await?;
+        tracing::debug!("[Client] Opened stream {} in session", stream.id());
+        
+        // Write destination address to stream (SOCKS5 format)
+        // Use session's write_data_frame to send data without needing to unwrap Arc<Stream>
+        tracing::debug!("[Client] Writing destination address to stream {}: {}:{}", stream.id(), destination.0, destination.1);
+        
+        // Prepare the SOCKS5 address bytes
+        let (addr, port) = destination;
+        let mut addr_bytes = Vec::new();
+        
+        if let Ok(ipv4) = addr.parse::<Ipv4Addr>() {
+            // IPv4
+            tracing::trace!("[Client] Writing IPv4 address: {:?}", ipv4);
+            addr_bytes.push(0x01); // ATYP_IPV4
+            addr_bytes.extend_from_slice(&ipv4.octets());
+        } else if let Ok(ipv6) = addr.parse::<Ipv6Addr>() {
+            // IPv6
+            tracing::trace!("[Client] Writing IPv6 address: {:?}", ipv6);
+            addr_bytes.push(0x04); // ATYP_IPV6
+            addr_bytes.extend_from_slice(&ipv6.octets());
+        } else {
+            // Domain name
+            tracing::trace!("[Client] Writing domain name: {}", addr);
+            let domain_bytes = addr.as_bytes();
+            if domain_bytes.len() > 255 {
+                return Err(AnyTlsError::Protocol("Domain name too long".to_string()));
+            }
+            addr_bytes.push(0x03); // ATYP_DOMAIN
+            addr_bytes.push(domain_bytes.len() as u8);
+            addr_bytes.extend_from_slice(domain_bytes);
+        }
+        
+        // Write port (2 bytes, big-endian)
+        tracing::trace!("[Client] Writing port: {}", port);
+        addr_bytes.extend_from_slice(&port.to_be_bytes());
+        
+        // Use session's write_data_frame to send the address bytes
+        // This avoids the need to unwrap Arc<Stream> which fails when multiple references exist
+        let stream_id = stream.id();
+        use bytes::Bytes;
+        tracing::info!("[Client] 📤 Writing destination address ({} bytes) to stream {}", addr_bytes.len(), stream_id);
+        
+        // Disable buffering before writing first data frame
+        // This is critical: in Go version, buffering is disabled when proxy writes SocksAddr
+        // This ensures buffered Settings frame is flushed along with the first data
+        session.disable_buffering();
+        tracing::info!("[Client] ✅ Buffering disabled, buffer will be flushed");
+        
+        session.write_data_frame(stream_id, Bytes::from(addr_bytes)).await?;
+        
+        tracing::info!("[Client] ✅ Successfully wrote destination address to stream {}", stream_id);
+        tracing::info!("[Client] ⏳ Waiting for SYNACK from server for stream {}...", stream_id);
+        
+        // Note: In Go version, client waits for SYNACK, but we don't wait here
+        // The SYNACK will be processed by recv_loop when it arrives
+        // For now, we just return the stream and let data forwarding start
+        
+        Ok((stream, session))
+    }
+
+    /// Create a new stream by establishing or reusing a session
+    pub async fn create_stream(&self) -> Result<Arc<Session>> {
+        // Try to get an idle session from pool
+        if let Some(session) = self.session_pool.get_idle_session().await {
+            tracing::debug!("[Client] Reusing idle session from pool");
+            return Ok(session);
+        }
+
+        tracing::debug!("[Client] No idle session found, creating new session");
+        // Create new session
+        self.create_new_session().await
+    }
+
+    /// Create a new session with the server
+    async fn create_new_session(&self) -> Result<Arc<Session>> {
+        tracing::debug!("[Client] Creating new session to {}", self.server_addr);
+        
+        // Establish TCP connection
+        tracing::trace!("[Client] Connecting TCP to {} (this may trigger DNS lookup)", self.server_addr);
+        let tcp_stream = match TcpStream::connect(&self.server_addr).await {
+            Ok(stream) => stream,
+            Err(e) => {
+                tracing::error!("[Client] Failed to connect to {}: {}", self.server_addr, e);
+                
+                // Provide helpful error messages
+                let error_str = format!("{}", e);
+                if error_str.contains("lookup") || error_str.contains("DNS") || error_str.contains("Try again") {
+                    tracing::error!("[Client] DNS resolution failed for '{}'", self.server_addr);
+                    tracing::error!("[Client] Troubleshooting steps:");
+                    tracing::error!("[Client]   1. Check if server address is correct: {}", self.server_addr);
+                    tracing::error!("[Client]   2. Try using IP address instead of hostname");
+                    tracing::error!("[Client]   3. Test DNS: nslookup $(echo {} | cut -d: -f1)", self.server_addr);
+                    tracing::error!("[Client]   4. Test TCP connection: nc -zv $(echo {} | cut -d: -f1) $(echo {} | cut -d: -f2)", self.server_addr, self.server_addr);
+                } else if error_str.contains("Connection refused") {
+                    tracing::error!("[Client] Connection refused. Server may not be running or not listening on {}", self.server_addr);
+                } else if error_str.contains("Connection timed out") {
+                    tracing::error!("[Client] Connection timed out. Check network connectivity and firewall settings");
+                }
+                
+                return Err(AnyTlsError::Io(e));
+            }
+        };
+        tracing::debug!("[Client] TCP connection established to {}", self.server_addr);
+        
+        // Perform TLS handshake
+        let server_name = ServerName::try_from("localhost".to_string())
+            .map_err(|_| AnyTlsError::Tls("invalid server name".to_string()))?;
+        
+        tracing::trace!("[Client] Starting TLS handshake");
+        let tls_stream = self.tls_config
+            .connect(server_name, tcp_stream)
+            .await
+            .map_err(|e| {
+                tracing::error!("[Client] TLS handshake failed: {}", e);
+                AnyTlsError::Tls(format!("TLS handshake failed: {}", e))
+            })?;
+        tracing::debug!("[Client] TLS handshake successful");
+
+        // Send authentication
+        // Split TLS stream into reader and writer
+        let (reader, mut writer) = tokio::io::split(tls_stream);
+        tracing::trace!("[Client] Sending authentication");
+        send_authentication(&mut writer, &self.password_hash, &self.padding).await?;
+        tracing::debug!("[Client] Authentication sent successfully");
+        
+        // Create session with reader and writer
+        let session = Arc::new(Session::new_client(
+            reader,
+            writer,
+            self.padding.clone(),
+        ));
+        
+        // Set sequence number for pool ordering (use timestamp-based counter)
+        static SEQ_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = SEQ_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        session.set_seq(seq);
+        tracing::debug!("[Client] Session created with seq={}", seq);
+        
+        // Start session (send settings and start loops)
+        tracing::trace!("[Client] Starting client session");
+        session.clone().start_client().await?;
+        tracing::debug!("[Client] Client session started successfully");
+        
+        // Store in pool
+        self.session_pool.add_idle_session(session.clone()).await;
+        tracing::debug!("[Client] Session added to pool");
+        
+        Ok(session)
+    }
+}

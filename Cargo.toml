@@ -1,0 +1,54 @@
+[package]
+name = "anytls-rs"
+version = "0.1.0"
+edition = "2021"
+authors = ["AnyTLS Contributors"]
+description = "AnyTLS protocol implementation in Rust"
+license = "MIT"
+
+[dependencies]
+# 异步运行时
+tokio = { version = "1.36", features = ["full"] }
+
+# TLS
+rustls = "0.23"
+tokio-rustls = "0.26"
+rcgen = "0.14"  # Certificate generation
+
+# 序列化
+serde = { version = "1", features = ["derive"] }
+
+# 网络协议
+bytes = "1.5"
+tokio-util = { version = "0.7", features = ["codec"] }
+
+# 加密哈希
+sha2 = "0.10"
+md5 = "0.8"
+
+# 随机数
+rand = "0.9"
+
+# 日志
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# 错误处理
+thiserror = "2.0"
+anyhow = "1.0"
+
+[dev-dependencies]
+tokio-test = "0.4"
+criterion = { version = "0.7", features = ["html_reports", "async_tokio"] }
+
+[[bench]]
+name = "session_bench"
+harness = false
+
+[[bin]]
+name = "anytls-client"
+path = "src/bin/client.rs"
+
+[[bin]]
+name = "anytls-server"
+path = "src/bin/server.rs"

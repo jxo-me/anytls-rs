@@ -1,0 +1,76 @@
+# Rust 编译产物
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo 相关
+Cargo.lock  # 对于库项目取消注释，对于二进制项目保留
+**/*.rs.bk
+
+# 调试文件
+debug/
+target/debug/
+target/release/
+
+# IDE 配置
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# 日志文件
+*.log
+server.log
+client.log
+
+# 临时测试文件
+*.tmp
+test_*.bin
+test_large.bin
+
+# 性能分析文件
+perf.data
+perf.data.old
+flamegraph.svg
+
+# 基准测试结果
+/benches/target/
+
+# 文档生成
+/doc/
+
+# 操作系统文件
+Thumbs.db
+.DS_Store
+
+# 环境变量文件
+.env
+.env.local
+
+# 备份文件
+*.bak
+*.backup
+*~
+
+# 测试覆盖率
+*.profraw
+*.profdata
+/coverage/
+/tarpaulin-report.html
+
+# 临时构建文件
+*.exe~
+*.dll~
+*.so~
+*.dylib~
+
+# Rust analyzer 缓存
+/.rust-analyzer/
+
+# LLVM 覆盖率文件
+*.gcda
+*.gcno
+*.gcov
+
