@@ -2,7 +2,7 @@
 //!
 //! Stream provides a duplex communication channel that implements AsyncRead and AsyncWrite
 
-use crate::util::AnyTlsError;
+use crate::util::{AnyTlsError, Result};
 use crate::session::StreamReader;
 use bytes::Bytes;
 use std::future::Future;
@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 /// Stream represents a single data stream within a Session
 /// It implements AsyncRead and AsyncWrite to be used as a connection
@@ -25,6 +25,9 @@ pub struct Stream {
     // ===== 写入部分：直接使用 channel，无需锁 =====
     writer_tx: mpsc::UnboundedSender<(u32, Bytes)>,
     
+    // ===== SYNACK 通知 (用于超时检测) =====
+    synack_tx: Arc<tokio::sync::Mutex<Option<oneshot::Sender<Result<()>>>>>,
+    
     // ===== 状态管理 =====
     is_closed: Arc<AtomicBool>,
     close_error: Arc<tokio::sync::Mutex<Option<AnyTlsError>>>,
@@ -37,17 +40,43 @@ impl Stream {
     /// * `id` - Stream ID
     /// * `reader` - StreamReader 用于读取数据
     /// * `writer_tx` - 发送数据到 Session 的 channel
+    /// 
+    /// # Returns
+    /// (Stream, Receiver) - The receiver can be used to wait for SYNACK
     pub fn new(
         id: u32,
         reader: StreamReader,
         writer_tx: mpsc::UnboundedSender<(u32, Bytes)>,
-    ) -> Self {
-        Self {
+    ) -> (Self, oneshot::Receiver<Result<()>>) {
+        let (synack_tx, synack_rx) = oneshot::channel();
+        
+        let stream = Self {
             id,
             reader: Arc::new(tokio::sync::Mutex::new(reader)),
             writer_tx,
+            synack_tx: Arc::new(tokio::sync::Mutex::new(Some(synack_tx))),
             is_closed: Arc::new(AtomicBool::new(false)),
             close_error: Arc::new(tokio::sync::Mutex::new(None)),
+        };
+        
+        (stream, synack_rx)
+    }
+    
+    /// Notify that SYNACK has been received
+    /// 
+    /// # Arguments
+    /// * `result` - Ok(()) for success, Err for error
+    pub async fn notify_synack(&self, result: Result<()>) {
+        let mut tx_guard = self.synack_tx.lock().await;
+        if let Some(tx) = tx_guard.take() {
+            let result_clone = match &result {
+                Ok(()) => Ok(()),
+                Err(e) => Err(AnyTlsError::Protocol(e.to_string())),
+            };
+            let _ = tx.send(result_clone);
+            tracing::debug!("[Stream] SYNACK notified for stream {}: {:?}", self.id, result.is_ok());
+        } else {
+            tracing::warn!("[Stream] SYNACK already notified for stream {}", self.id);
         }
     }
 
@@ -193,7 +222,7 @@ mod tests {
         let (_reader_tx, reader_rx) = mpsc::unbounded_channel();
         
         let reader = StreamReader::new(1, reader_rx);
-        let mut stream = Stream::new(1, reader, tx);
+        let (mut stream, _synack_rx) = Stream::new(1, reader, tx);
         
         // 写入数据
         stream.write_all(b"hello").await.unwrap();
@@ -210,7 +239,7 @@ mod tests {
         let (reader_tx, reader_rx) = mpsc::unbounded_channel();
         
         let reader = StreamReader::new(1, reader_rx);
-        let mut stream = Stream::new(1, reader, tx);
+        let (mut stream, _synack_rx) = Stream::new(1, reader, tx);
         
         // 发送数据到 reader
         reader_tx.send(Bytes::from("world")).unwrap();
@@ -229,7 +258,7 @@ mod tests {
         let (reader_tx, reader_rx) = mpsc::unbounded_channel();
         
         let reader = StreamReader::new(1, reader_rx);
-        let mut stream = Stream::new(1, reader, tx);
+        let (mut stream, _synack_rx) = Stream::new(1, reader, tx);
         
         // 同时读写
         reader_tx.send(Bytes::from("input")).unwrap();
