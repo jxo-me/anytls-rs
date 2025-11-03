@@ -57,6 +57,7 @@ pub async fn create_test_client(config: &TestConfig) -> anyhow::Result<Arc<Clien
 }
 
 /// Wait for a condition to become true (with timeout)
+#[allow(dead_code)]
 pub async fn wait_for<F>(mut condition: F, timeout: Duration) -> bool
 where
     F: FnMut() -> bool,
@@ -72,11 +73,9 @@ where
 }
 
 /// Check if a port is listening
+#[allow(dead_code)]
 pub async fn is_port_listening(addr: &str) -> bool {
     use tokio::net::TcpStream;
-    match TcpStream::connect(addr).await {
-        Ok(_) => true,
-        Err(_) => false,
-    }
+    TcpStream::connect(addr).await.is_ok()
 }
 

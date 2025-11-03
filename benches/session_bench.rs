@@ -5,7 +5,7 @@
 use anytls_rs::padding::PaddingFactory;
 use anytls_rs::protocol::{Frame, Command};
 use anytls_rs::session::Session;
-use anytls_rs::util::{auth, tls};
+use anytls_rs::util::auth;
 use bytes::Bytes;
 use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId};
 use std::hint::black_box;
@@ -149,7 +149,7 @@ fn bench_padding_factory(c: &mut Criterion) {
 }
 
 fn bench_password_hashing(c: &mut Criterion) {
-    let passwords = vec!["short", "medium_length_password", "very_long_password_that_exceeds_normal_length"];
+    let passwords = ["short", "medium_length_password", "very_long_password_that_exceeds_normal_length"];
     
     let mut group = c.benchmark_group("password_hashing");
     

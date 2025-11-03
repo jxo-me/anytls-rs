@@ -7,7 +7,6 @@ use anytls_rs::util::create_server_config;
 use std::sync::Arc;
 use tokio_rustls::TlsAcceptor;
 use tracing::{info, error};
-use tracing_subscriber;
 
 #[tokio::main]
 async fn main() -> Result<()> {
