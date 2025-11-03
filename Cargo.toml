@@ -1,9 +1,9 @@
 [package]
 name = "anytls-rs"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["AnyTLS Contributors"]
-description = "AnyTLS protocol implementation in Rust"
+description = "AnyTLS protocol implementation in Rust - Stream architecture refactored"
 license = "MIT"
 
 [dependencies]
