@@ -659,7 +659,7 @@ impl Session {
                 // Log first frame's header for debugging
                 if buffered_len >= 7 {
                     tracing::info!("[Session] 🔍 First buffered frame header: cmd={}, stream_id={:?}, data_len={:?}", 
-                        buf[0], 
+                        buf[0],
                         u32::from_be_bytes([buf[1], buf[2], buf[3], buf[4]]),
                         u16::from_be_bytes([buf[5], buf[6]]));
                 }
@@ -674,7 +674,7 @@ impl Session {
         // Log what we're about to send
         if buffer.len() >= 7 {
             tracing::info!("[Session] 🔍 About to send frame header: cmd={}, stream_id={:?}, data_len={:?}, total_buffer_len={}", 
-                buffer[0], 
+                buffer[0],
                 u32::from_be_bytes([buffer[1], buffer[2], buffer[3], buffer[4]]),
                 u16::from_be_bytes([buffer[5], buffer[6]]),
                 buffer.len());
