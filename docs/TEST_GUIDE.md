@@ -237,8 +237,8 @@ ps aux | grep anytls
 
 ## 📖 参考文档
 
-- `TEST_PLAN.md` - 详细测试计划
-- `MANUAL_TEST.md` - 手动测试指南
+- 测试计划和结果已包含在 `TEST_SUCCESS_REPORT.md` 和 `TEST_RESULTS.md` 中
+- 手动测试说明已包含在本文档中
 - `test_e2e.sh` - 自动化测试脚本
 - `test_simple.sh` - 简化测试脚本
 

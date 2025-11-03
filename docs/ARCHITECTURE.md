@@ -693,15 +693,15 @@ perf report
 
 ### 常见问题
 
-查看 [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
+查看 [TROUBLESHOOTING.md](./TROUBLESHOOTING.md)
 
 ---
 
 ## 参考资料
 
 - [AnyTLS 协议文档](anytls-go/docs/protocol.md)
-- [TEST_SUCCESS_REPORT.md](TEST_SUCCESS_REPORT.md) - 测试报告
-- [REFACTOR_COMPLETE_SUMMARY.md](REFACTOR_COMPLETE_SUMMARY.md) - 重构总结
+- [TEST_SUCCESS_REPORT.md](./TEST_SUCCESS_REPORT.md) - 测试报告
+- [REFACTOR_COMPLETE_SUMMARY.md](./REFACTOR_COMPLETE_SUMMARY.md) - 重构总结
 
 ---
 

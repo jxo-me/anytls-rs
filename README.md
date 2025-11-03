@@ -3,7 +3,7 @@
 [![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/yourusername/anytls-rs)
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-45%2F45-brightgreen.svg)](V0.3.0_FINAL_SUMMARY.md)
+[![Tests](https://img.shields.io/badge/tests-45%2F45-brightgreen.svg)](docs/V0.3.0_FINAL_SUMMARY.md)
 
 高性能的 AnyTLS 协议 Rust 实现，用于缓解 TLS-in-TLS 指纹识别问题。
 
@@ -71,7 +71,7 @@
 | SYNACK 测试 | ✅ 通过 | 100% (3/3) | v0.3.0 |
 | 总计 | ✅ 通过 | **100% (45/45)** | v0.3.0 |
 
-详细测试报告: [V0.3.0_FINAL_SUMMARY.md](V0.3.0_FINAL_SUMMARY.md)
+详细测试报告: [V0.3.0_FINAL_SUMMARY.md](docs/V0.3.0_FINAL_SUMMARY.md)
 
 ---
 
@@ -250,7 +250,7 @@ pub struct Stream {
 - ✅ 性能提升 40-60%
 - ✅ 消除死锁风险
 
-详细信息: [REFACTOR_COMPLETE_SUMMARY.md](REFACTOR_COMPLETE_SUMMARY.md)
+详细信息: [REFACTOR_COMPLETE_SUMMARY.md](docs/REFACTOR_COMPLETE_SUMMARY.md)
 
 ---
 
@@ -318,17 +318,16 @@ start target\criterion\report\index.html  # Windows
 
 ### 核心文档
 
-- [TEST_SUCCESS_REPORT.md](TEST_SUCCESS_REPORT.md) - 详细测试报告
-- [REFACTOR_COMPLETE_SUMMARY.md](REFACTOR_COMPLETE_SUMMARY.md) - Stream 重构总结
-- [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md) - 项目完整总结
-- [FINAL_REPORT.md](FINAL_REPORT.md) - 最终完成报告
+- [TEST_SUCCESS_REPORT.md](docs/TEST_SUCCESS_REPORT.md) - 详细测试报告
+- [REFACTOR_COMPLETE_SUMMARY.md](docs/REFACTOR_COMPLETE_SUMMARY.md) - Stream 重构总结
+- [PROJECT_SUMMARY.md](docs/PROJECT_SUMMARY.md) - 项目完整总结
 
 ### 开发指南
 
-- [TEST_GUIDE.md](TEST_GUIDE.md) - 测试指南
-- [DEBUG_GUIDE.md](DEBUG_GUIDE.md) - 调试指南
-- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) - 故障排除
-- [BENCHMARK_GUIDE.md](BENCHMARK_GUIDE.md) - 性能测试指南
+- [TEST_GUIDE.md](docs/TEST_GUIDE.md) - 测试指南
+- [DEBUG_GUIDE.md](docs/DEBUG_GUIDE.md) - 调试指南
+- [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) - 故障排除
+- [BENCHMARK_GUIDE.md](docs/BENCHMARK_GUIDE.md) - 性能测试指南
 
 ### API 文档
 

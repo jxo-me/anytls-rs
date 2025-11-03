@@ -364,5 +364,5 @@ v1.0.0 (稳定):     ████░░░░░░░░░░░░░░░�
 ---
 
 **更新日期**: 2025-11-03  
-**详细文档**: [FEATURE_COMPARISON.md](FEATURE_COMPARISON.md)
+**详细文档**: [FEATURE_COMPARISON.md](./FEATURE_COMPARISON.md)
 

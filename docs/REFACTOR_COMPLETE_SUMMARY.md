@@ -402,9 +402,8 @@ acbde48 fix: Resolve compilation errors in Stream and Handler
 如有问题或需要进一步优化，请查看以下文档：
 
 - `TEST_SUCCESS_REPORT.md`: 详细测试报告
-- `NEXT_STEPS_ACTION_PLAN.md`: 后续行动计划
-- `REFACTOR_IMPLEMENTATION_GUIDE.md`: 实施指南
-- `REFACTOR_TEST_CHECKLIST.md`: 测试清单
+- 后续计划已包含在 `PROJECT_SUMMARY.md` 中
+- 实施和测试详情已包含在本文档中
 
 ---
 

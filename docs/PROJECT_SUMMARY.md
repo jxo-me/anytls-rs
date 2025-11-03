@@ -164,10 +164,7 @@ c753aa9 Merge branch 'refactor/stream-reader-writer'
 |------|------|------|
 | `TEST_SUCCESS_REPORT.md` | 测试结果详解 | 278 行 |
 | `REFACTOR_COMPLETE_SUMMARY.md` | 完整重构总结 | 418 行 |
-| `NEXT_STEPS_ACTION_PLAN.md` | 后续行动计划 | 409 行 |
-| `REFACTOR_TEST_CHECKLIST.md` | 测试清单 | 268 行 |
-| `REFACTOR_SUMMARY.md` | 重构摘要 | 320 行 |
-| `DEPLOYMENT_COMPLETE.md` | 部署完成报告 | 409 行 |
+| `V0.3.0_FINAL_SUMMARY.md` | v0.3.0 完整总结 | - |
 | `PROJECT_SUMMARY.md` | 项目总结（本文档） | - |
 
 **文档总字数**: ~50,000 字
@@ -313,7 +310,7 @@ git push origin master
 git push origin --tags
 
 # 或查看更多选项
-cat NEXT_STEPS_ACTION_PLAN.md
+查看后续计划，请参考 `V0.3.0_FINAL_SUMMARY.md` 中的未来展望部分
 ```
 
 ---
@@ -326,9 +323,9 @@ cat NEXT_STEPS_ACTION_PLAN.md
 |------|---------|
 | 了解测试结果 | `TEST_SUCCESS_REPORT.md` |
 | 了解重构细节 | `REFACTOR_COMPLETE_SUMMARY.md` |
-| 了解下一步 | `NEXT_STEPS_ACTION_PLAN.md` |
+| 了解下一步 | `V0.3.0_FINAL_SUMMARY.md` |
 | 运行测试 | `run_comprehensive_tests.ps1` |
-| 查看部署状态 | `DEPLOYMENT_COMPLETE.md` |
+| 查看版本信息 | `RELEASE_NOTES_v0.3.0.md` |
 | 快速概览 | `PROJECT_SUMMARY.md` (本文档) |
 
 ### 重要文件

@@ -38,8 +38,7 @@ v0.3.0 是一个重大更新版本，新增了 3 个核心功能和 1 个重要�
   - 双向心跳测试
 
 - **文档**:
-  - `HEARTBEAT_INTEROP_TEST_GUIDE.md` - 互操作测试指南
-  - `STAGE1_HEARTBEAT_COMPLETE.md` - 完成报告
+  - 详细内容见 `V0.3.0_FINAL_SUMMARY.md`
 
 #### 2. UDP over TCP 支持 (Stage 2) ⭐
 
@@ -66,7 +65,7 @@ v0.3.0 是一个重大更新版本，新增了 3 个核心功能和 1 个重要�
 - **文档**:
   - `UDP_OVER_TCP_PROTOCOL.md` - 协议分析
   - `UDP_OVER_TCP_USAGE.md` - 使用指南
-  - `STAGE2_UDP_COMPLETE.md` - 完成报告
+  - 详细内容见 `V0.3.0_FINAL_SUMMARY.md`
 
 #### 3. 会话池配置增强 (Stage 3)
 
@@ -87,7 +86,7 @@ v0.3.0 是一个重大更新版本，新增了 3 个核心功能和 1 个重要�
 - **测试**: 5 个单元测试
 
 - **文档**:
-  - `STAGE3_SESSION_POOL_COMPLETE.md` - 完成报告
+  - 详细内容见 `V0.3.0_FINAL_SUMMARY.md`
 
 #### 4. SYNACK 超时检测 (Stage 4)
 
@@ -107,7 +106,7 @@ v0.3.0 是一个重大更新版本，新增了 3 个核心功能和 1 个重要�
   - SYNACK 错误消息
 
 - **文档**:
-  - `STAGE4_SYNACK_TIMEOUT_COMPLETE.md` - 完成报告
+  - 详细内容见 `V0.3.0_FINAL_SUMMARY.md`
 
 ### 🔧 改进
 
@@ -120,15 +119,9 @@ v0.3.0 是一个重大更新版本，新增了 3 个核心功能和 1 个重要�
 ### 📚 文档
 
 新增文档文件:
-- `HEARTBEAT_INTEROP_TEST_GUIDE.md`
-- `UDP_OVER_TCP_PROTOCOL.md`
-- `UDP_OVER_TCP_USAGE.md`
-- `STAGE1_HEARTBEAT_COMPLETE.md`
-- `STAGE2_UDP_COMPLETE.md`
-- `STAGE3_SESSION_POOL_COMPLETE.md`
-- `STAGE4_SYNACK_TIMEOUT_COMPLETE.md`
-- `V0.3.0_COMPLETE_SUMMARY.md`
-- `V0.3.0_FINAL_SUMMARY.md`
+- `UDP_OVER_TCP_PROTOCOL.md` - UDP over TCP 协议文档
+- `UDP_OVER_TCP_USAGE.md` - UDP over TCP 使用指南
+- `V0.3.0_FINAL_SUMMARY.md` - v0.3.0 完整总结（包含所有阶段详情）
 
 ### 🧪 测试
 
@@ -232,7 +225,7 @@ Stream 架构重构 - 彻底解决第二次请求阻塞问题！
 - **并发测试**: 5/10/20 并发全部通过
 - **压力测试**: 50 次请求 98% 成功
 
-测试详情: [TEST_SUCCESS_REPORT.md](TEST_SUCCESS_REPORT.md)
+测试详情: [TEST_SUCCESS_REPORT.md](./TEST_SUCCESS_REPORT.md)
 
 #### 📝 文档
 

@@ -657,9 +657,9 @@ cargo publish
 
 ### 文档
 
-- [README.md](README.md) - 项目概览
-- [ARCHITECTURE.md](ARCHITECTURE.md) - 架构文档
-- [TEST_GUIDE.md](TEST_GUIDE.md) - 测试指南
+- [README.md](../README.md) - 项目概览
+- [ARCHITECTURE.md](./ARCHITECTURE.md) - 架构文档
+- [TEST_GUIDE.md](./TEST_GUIDE.md) - 测试指南
 
 ### 社区
 
