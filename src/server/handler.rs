@@ -189,7 +189,8 @@ async fn proxy_tcp_connection_with_synack_internal(
         Err(e) => {
             tracing::error!("[Proxy] ❌ Failed to connect to {}: {}", target_addr, e);
             // Send SYNACK with error if protocol version >= 2
-            if peer_version >= 2 && stream_id >= 2 {
+            // Note: All streams should receive SYNACK in protocol v2+, including stream_id=1
+            if peer_version >= 2 {
                 let error_msg = format!("Failed to connect to {}: {}", target_addr, e);
                 let synack_frame = Frame::with_data(
                     Command::SynAck,
@@ -204,9 +205,10 @@ async fn proxy_tcp_connection_with_synack_internal(
         }
     };
     
-    // Send SYNACK after successful connection (protocol v >= 2 and stream_id >= 2)
+    // Send SYNACK after successful connection (protocol v >= 2)
+    // Note: All streams should receive SYNACK in protocol v2+, including stream_id=1
     // Similar to Go's ReportHandshakeSuccess - called after TCP connection is established
-    if peer_version >= 2 && stream_id >= 2 {
+    if peer_version >= 2 {
         tracing::info!("[Proxy] 📤 Sending SYNACK for stream {} (connection established)", stream_id);
         let synack_frame = Frame::control(Command::SynAck, stream_id);
         if let Err(e) = session.write_control_frame(synack_frame).await {
