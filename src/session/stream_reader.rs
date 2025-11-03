@@ -113,6 +113,27 @@ impl StreamReader {
     pub fn buffer_len(&self) -> usize {
         self.reader_buffer.len()
     }
+    
+    /// 精确读取指定数量的字节（辅助方法）
+    /// 
+    /// 类似于 AsyncReadExt::read_exact，但使用我们自己的 read() 方法
+    pub async fn read_exact(&mut self, buf: &mut [u8]) -> io::Result<()> {
+        let mut offset = 0;
+        let total = buf.len();
+        
+        while offset < total {
+            let n = self.read(&mut buf[offset..]).await?;
+            if n == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    format!("Failed to read exact {} bytes, only read {}", total, offset)
+                ));
+            }
+            offset += n;
+        }
+        
+        Ok(())
+    }
 }
 
 // StreamReader 不需要实现 Clone

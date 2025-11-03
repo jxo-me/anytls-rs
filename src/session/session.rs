@@ -254,9 +254,12 @@ impl Session {
                     
                     let (receive_tx, receive_rx) = mpsc::unbounded_channel();
                     
+                    // 创建 StreamReader
+                    let reader = crate::session::StreamReader::new(stream_id, receive_rx);
+                    
                     let stream = Arc::new(Stream::new(
                         stream_id,
-                        receive_rx,
+                        reader,
                         self.stream_data_tx.clone(),
                     ));
                     
@@ -438,9 +441,12 @@ impl Session {
         // Create channels for this stream
         let (receive_tx, receive_rx) = mpsc::unbounded_channel();
         
+        // 创建 StreamReader
+        let reader = crate::session::StreamReader::new(stream_id, receive_rx);
+        
         let stream = Arc::new(Stream::new(
             stream_id,
-            receive_rx,
+            reader,
             self.stream_data_tx.clone(),
         ));
         
