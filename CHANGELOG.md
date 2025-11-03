@@ -6,6 +6,20 @@
 
 ---
 
+## [Unreleased]
+
+### ✨ 新增
+
+- **被动心跳响应** - 实现 HeartRequest/HeartResponse 处理
+  - Session 能正确响应 HeartRequest
+  - Session 能正确接收 HeartResponse
+  - 为未来主动心跳检测打基础
+  - 3 个单元测试（src/session/session.rs）
+  - 3 个集成测试（tests/heartbeat.rs）
+  - 与 Go 实现兼容
+
+---
+
 ## [0.2.0] - 2025-11-03
 
 ### 🎉 重大改进
