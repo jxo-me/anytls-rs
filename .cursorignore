@@ -1,0 +1,111 @@
+# Cursor AI 忽略文件
+# 这些文件/目录不会被 Cursor 索引，可以提高性能
+
+# ===== Rust 编译产物 =====
+# 编译目录（包含大量中间文件）
+target/
+**/target/
+
+# 构建缓存
+.cargo/
+**/.cargo/
+
+# 增量编译缓存
+**/incremental/
+
+# ===== 依赖和库文件 =====
+# 编译的依赖库
+*.rlib
+*.rmeta
+*.so
+*.dylib
+*.dll
+*.exe
+*.a
+*.lib
+
+# 静态库文件
+**/*.rlib
+**/*.rmeta
+
+# ===== 临时和日志文件 =====
+*.log
+server.log
+client.log
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# ===== 测试和调试文件 =====
+# 大型测试文件
+test_large.bin
+test_*.bin
+
+# 调试符号
+*.pdb
+*.dSYM/
+
+# 性能分析文件
+perf.data
+perf.data.old
+flamegraph.svg
+*.profraw
+*.profdata
+
+# ===== IDE 和编辑器文件 =====
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Rust analyzer 缓存（可能很大）
+.rust-analyzer/
+
+# ===== 文档和报告 =====
+# 生成的文档
+/doc/
+/target/doc/
+
+# 覆盖率报告
+/coverage/
+/tarpaulin-report.html
+
+# 基准测试报告
+/target/criterion/
+**/criterion/
+
+# ===== 操作系统文件 =====
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===== 二进制和可执行文件 =====
+# Linux 交叉编译产物
+target/aarch64-unknown-linux-gnu/
+target/x86_64-unknown-linux-gnu/
+
+# 已编译的二进制文件
+anytls-server
+anytls-server.exe
+anytls-client
+anytls-client.exe
+
+# ===== 构建工件 =====
+# C/C++ 编译中间文件（来自依赖）
+*.o
+*.obj
+*.a
+*.lib
+
+# ===== 大型日志和数据文件 =====
+# 可能很大的日志文件
+*.log.*
+logs/
+*.trace
+
+# ===== Node/JavaScript (如果有前端) =====
+node_modules/
+**/node_modules/
+
