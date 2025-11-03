@@ -1,10 +1,6 @@
 //! Common test utilities and helpers
 
-use anytls_rs::{
-    client::Client,
-    server::Server,
-    util::tls,
-};
+use anytls_rs::{client::Client, server::Server, util::tls};
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
 
@@ -30,13 +26,9 @@ pub async fn create_test_server(config: &TestConfig) -> anyhow::Result<Arc<Serve
     let server_config = tls::create_server_config()?;
     let tls_acceptor = Arc::new(tokio_rustls::TlsAcceptor::from(server_config));
     let padding = anytls_rs::padding::PaddingFactory::default();
-    
-    let server = Arc::new(Server::new(
-        &config.password,
-        tls_acceptor,
-        padding,
-    ));
-    
+
+    let server = Arc::new(Server::new(&config.password, tls_acceptor, padding));
+
     Ok(server)
 }
 
@@ -45,14 +37,14 @@ pub async fn create_test_client(config: &TestConfig) -> anyhow::Result<Arc<Clien
     let client_config = tls::create_client_config(None)?;
     let tls_connector = Arc::new(tokio_rustls::TlsConnector::from(client_config));
     let padding = anytls_rs::padding::PaddingFactory::default();
-    
+
     let client = Arc::new(Client::new(
         &config.password,
         config.server_addr.clone(),
         tls_connector,
         padding,
     ));
-    
+
     Ok(client)
 }
 
@@ -78,4 +70,3 @@ pub async fn is_port_listening(addr: &str) -> bool {
     use tokio::net::TcpStream;
     TcpStream::connect(addr).await.is_ok()
 }
-

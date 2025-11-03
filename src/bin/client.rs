@@ -1,12 +1,12 @@
 //! AnyTLS Client binary
 
 use anyhow::{Context, Result};
-use anytls_rs::client::{Client, start_socks5_server};
+use anytls_rs::client::{start_socks5_server, Client};
 use anytls_rs::padding::PaddingFactory;
 use anytls_rs::util::create_client_config;
 use std::sync::Arc;
 use tokio_rustls::TlsConnector;
-use tracing::{info, error};
+use tracing::{error, info};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -42,7 +42,9 @@ async fn main() -> Result<()> {
             "-h" | "--help" => {
                 println!("Usage: anytls-client [OPTIONS]");
                 println!("Options:");
-                println!("  -l, --listen ADDRESS      SOCKS5 listen address (default: 127.0.0.1:1080)");
+                println!(
+                    "  -l, --listen ADDRESS      SOCKS5 listen address (default: 127.0.0.1:1080)"
+                );
                 println!("  -s, --server ADDRESS     Server address (default: 127.0.0.1:8443)");
                 println!("  --sni SNI                 TLS SNI (optional)");
                 println!("  -p, --password PASSWORD  Server password (required)");
@@ -59,9 +61,9 @@ async fn main() -> Result<()> {
     let password = password.context("Password is required (use -p or --password)")?;
 
     // Create TLS config
-    let client_config = create_client_config(sni.clone())
-        .context("Failed to create TLS client config")?;
-    
+    let client_config =
+        create_client_config(sni.clone()).context("Failed to create TLS client config")?;
+
     // Create TLS connector
     let tls_connector = TlsConnector::from(client_config);
 
@@ -80,9 +82,10 @@ async fn main() -> Result<()> {
     ));
 
     info!("[Client] Client created successfully");
-    
+
     // Start SOCKS5 server
-    start_socks5_server(&listen_addr, client).await
+    start_socks5_server(&listen_addr, client)
+        .await
         .context("SOCKS5 server error")?;
 
     Ok(())

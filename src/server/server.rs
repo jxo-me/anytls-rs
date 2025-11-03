@@ -1,9 +1,9 @@
 //! AnyTLS Server implementation
 
 use crate::padding::PaddingFactory;
+use crate::server::handler::{StreamHandler, TcpProxyHandler};
 use crate::session::Session;
-use crate::server::handler::{TcpProxyHandler, StreamHandler};
-use crate::util::{AnyTlsError, Result, authenticate_client, hash_password};
+use crate::util::{authenticate_client, hash_password, AnyTlsError, Result};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
@@ -18,13 +18,9 @@ pub struct Server {
 
 impl Server {
     /// Create a new server
-    pub fn new(
-        password: &str,
-        tls_config: Arc<TlsAcceptor>,
-        padding: Arc<PaddingFactory>,
-    ) -> Self {
+    pub fn new(password: &str, tls_config: Arc<TlsAcceptor>, padding: Arc<PaddingFactory>) -> Self {
         let password_hash = hash_password(password);
-        
+
         Self {
             password_hash,
             tls_config,
@@ -45,19 +41,19 @@ impl Server {
     /// Start the server and listen for connections
     pub async fn listen(&self, addr: &str) -> Result<()> {
         let listener = TcpListener::bind(addr).await?;
-        
+
         tracing::info!("[Server] Listening on {}", addr);
-        
+
         loop {
             match listener.accept().await {
                 Ok((stream, addr)) => {
                     tracing::debug!("[Server] New connection from {}", addr);
-                    
+
                     let tls_config = Arc::clone(&self.tls_config);
                     let password_hash = self.password_hash;
                     let padding = Arc::clone(&self.padding);
                     let on_new_stream = self.on_new_stream.clone();
-                    
+
                     tokio::spawn(async move {
                         if let Err(e) = handle_connection(
                             stream,
@@ -65,7 +61,9 @@ impl Server {
                             password_hash,
                             padding,
                             on_new_stream,
-                        ).await {
+                        )
+                        .await
+                        {
                             tracing::error!("[Server] Connection error: {}", e);
                         }
                     });
@@ -86,17 +84,17 @@ async fn handle_connection(
     padding: Arc<PaddingFactory>,
     on_new_stream: Option<Arc<dyn Fn(Arc<crate::session::Stream>) + Send + Sync + 'static>>,
 ) -> Result<()> {
-    let peer_addr = tcp_stream.peer_addr().map(|a| a.to_string()).unwrap_or_else(|_| "unknown".to_string());
+    let peer_addr = tcp_stream
+        .peer_addr()
+        .map(|a| a.to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
     tracing::info!("[Server] 🔌 New connection from {}", peer_addr);
     // Perform TLS handshake
     tracing::info!("[Server] 🔐 Starting TLS handshake");
-    let tls_stream = tls_config
-        .accept(tcp_stream)
-        .await
-        .map_err(|e| {
-            tracing::error!("[Server] ❌ TLS handshake failed: {}", e);
-            AnyTlsError::Tls(format!("TLS handshake failed: {}", e))
-        })?;
+    let tls_stream = tls_config.accept(tcp_stream).await.map_err(|e| {
+        tracing::error!("[Server] ❌ TLS handshake failed: {}", e);
+        AnyTlsError::Tls(format!("TLS handshake failed: {}", e))
+    })?;
     tracing::info!("[Server] ✅ TLS handshake successful");
 
     // Authenticate client
@@ -106,28 +104,28 @@ async fn handle_connection(
     tracing::info!("[Server] ✅ Client authenticated");
 
     // Create callback channel for new streams
-    let (stream_callback_tx, mut stream_callback_rx) = tokio::sync::mpsc::unbounded_channel::<Arc<crate::session::Stream>>();
+    let (stream_callback_tx, mut stream_callback_rx) =
+        tokio::sync::mpsc::unbounded_channel::<Arc<crate::session::Stream>>();
 
     // Create server session
-    let mut session = Session::new_server(
-        reader,
-        writer,
-        padding,
-    );
-    
+    let mut session = Session::new_server(reader, writer, padding);
+
     // Set callback channel in session
     session.set_stream_callback(stream_callback_tx);
-    
+
     let session = Arc::new(session);
 
     tracing::info!("[Server] 📋 Session created, setting up handlers");
-    
+
     // Handle new streams in a task
     if let Some(callback) = on_new_stream {
         tracing::debug!("[Server] Using custom stream callback");
         tokio::spawn(async move {
             while let Some(stream) = stream_callback_rx.recv().await {
-                tracing::debug!("[Server] Received stream {} in custom callback", stream.id());
+                tracing::debug!(
+                    "[Server] Received stream {} in custom callback",
+                    stream.id()
+                );
                 // Spawn a new task for each stream to handle it asynchronously
                 let stream_clone = Arc::clone(&stream);
                 let callback_clone = Arc::clone(&callback);
@@ -142,7 +140,10 @@ async fn handle_connection(
         let session_for_handler = Arc::clone(&session);
         tokio::spawn(async move {
             while let Some(stream) = stream_callback_rx.recv().await {
-                tracing::debug!("[Server] Received stream {} for default handler", stream.id());
+                tracing::debug!(
+                    "[Server] Received stream {} for default handler",
+                    stream.id()
+                );
                 let stream_clone = Arc::clone(&stream);
                 let session_clone = Arc::clone(&session_for_handler);
                 // Create a new handler instance for each stream (TcpProxyHandler is small and stateless)
@@ -168,7 +169,10 @@ async fn handle_connection(
             Err(AnyTlsError::Io(e)) => {
                 // Check if this is a close_notify error (normal connection close)
                 let error_msg = e.to_string();
-                if error_msg.contains("close_notify") || error_msg.contains("unexpected EOF") || e.kind() == std::io::ErrorKind::UnexpectedEof {
+                if error_msg.contains("close_notify")
+                    || error_msg.contains("unexpected EOF")
+                    || e.kind() == std::io::ErrorKind::UnexpectedEof
+                {
                     tracing::debug!("[Server] recv_loop task ended: Connection closed by client (no close_notify) - this is normal");
                 } else {
                     tracing::error!("[Server] recv_loop task error: {}", e);
@@ -179,25 +183,26 @@ async fn handle_connection(
             }
         }
     });
-    
+
     // Start stream data processing
     tracing::info!("[Server] 🚀 Starting stream data processing");
     let session_clone = Arc::clone(&session);
     tokio::spawn(async move {
-        tracing::info!("[Server] ✅ process_stream_data task spawned! Starting server stream data processing");
+        tracing::info!(
+            "[Server] ✅ process_stream_data task spawned! Starting server stream data processing"
+        );
         if let Err(e) = session_clone.process_stream_data().await {
             tracing::error!("[Server] process_stream_data task error: {}", e);
         } else {
             tracing::info!("[Server] process_stream_data task completed normally");
         }
     });
-    
+
     tracing::debug!("[Server] Connection handler setup complete");
 
     // Wait for connection to close
     // The connection will be managed by the spawned tasks
     // In a production implementation, we'd wait for the session to close
-    
+
     Ok(())
 }
-

@@ -137,4 +137,3 @@ mod tests {
         assert_eq!(frame.total_size(), HEADER_OVERHEAD_SIZE + 5);
     }
 }
-

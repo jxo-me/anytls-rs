@@ -11,25 +11,25 @@
 //! - **client**: Client implementation
 //! - **server**: Server implementation
 
-/// Protocol layer: Frame and codec implementation
-pub mod protocol;
-/// Session layer: Session and stream management
-pub mod session;
-/// Padding module for traffic obfuscation
-pub mod padding;
-/// Utility modules (error, auth, TLS, etc.)
-pub mod util;
 /// Client implementation
 pub mod client;
+/// Padding module for traffic obfuscation
+pub mod padding;
+/// Protocol layer: Frame and codec implementation
+pub mod protocol;
 /// Server implementation
 pub mod server;
+/// Session layer: Session and stream management
+pub mod session;
+/// Utility modules (error, auth, TLS, etc.)
+pub mod util;
 
+pub use client::*;
+pub use padding::*;
 pub use protocol::*;
 pub use session::*;
-pub use padding::*;
 pub use util::*;
-pub use client::*;
 
 // Re-export commonly used types
+pub use util::auth::{authenticate_client, hash_password, send_authentication};
 pub use util::error::{AnyTlsError, Result};
-pub use util::auth::{hash_password, authenticate_client, send_authentication};

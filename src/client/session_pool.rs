@@ -6,17 +6,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
-use tokio::time::{Duration, Instant, interval};
+use tokio::time::{interval, Duration, Instant};
 
 /// Configuration for session pool
 #[derive(Debug, Clone)]
 pub struct SessionPoolConfig {
     /// Interval for checking idle sessions (default: 30s)
     pub check_interval: Duration,
-    
+
     /// Idle timeout for sessions (default: 60s)
     pub idle_timeout: Duration,
-    
+
     /// Minimum number of idle sessions to keep (default: 1)
     pub min_idle_sessions: usize,
 }
@@ -42,13 +42,13 @@ struct PooledSession {
 pub struct SessionPool {
     // Sessions stored by seq (BTreeMap for ordered access)
     idle_sessions: Arc<RwLock<BTreeMap<u64, PooledSession>>>,
-    
+
     // Sequence counter (monotonically increasing)
     next_seq: Arc<AtomicU64>,
-    
+
     // Configuration
     config: SessionPoolConfig,
-    
+
     // Cleanup task handle
     cleanup_task: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
@@ -64,7 +64,7 @@ impl SessionPool {
     pub fn new() -> Self {
         Self::with_config(SessionPoolConfig::default())
     }
-    
+
     /// Create a new session pool with custom configuration
     pub fn with_config(config: SessionPoolConfig) -> Self {
         let pool = Self {
@@ -73,27 +73,27 @@ impl SessionPool {
             config,
             cleanup_task: Arc::new(Mutex::new(None)),
         };
-        
+
         // Start automatic cleanup task
         pool.start_cleanup_task();
-        
+
         pool
     }
-    
+
     /// Get the next sequence number
     pub fn next_seq(&self) -> u64 {
         self.next_seq.fetch_add(1, Ordering::Relaxed)
     }
-    
+
     /// Get an idle session (returns the most recent one, i.e., largest seq)
     pub async fn get_idle_session(&self) -> Option<Arc<Session>> {
         let mut sessions = self.idle_sessions.write().await;
-        
+
         if sessions.is_empty() {
             tracing::debug!("[SessionPool] No idle sessions available");
             return None;
         }
-        
+
         // Get the session with the largest seq (most recent)
         if let Some((seq, _)) = sessions.last_key_value() {
             let seq_clone = *seq;
@@ -106,58 +106,58 @@ impl SessionPool {
                 return Some(pooled.session);
             }
         }
-        
+
         None
     }
-    
+
     /// Add a session to the idle pool
     pub async fn add_idle_session(&self, session: Arc<Session>) {
         let seq = session.seq();
-        
+
         let pooled = PooledSession {
             seq,
             session,
             idle_since: Instant::now(),
         };
-        
+
         let mut sessions = self.idle_sessions.write().await;
         sessions.insert(seq, pooled);
-        
+
         tracing::debug!(
             "[SessionPool] ➕ Added session to pool (seq={}, total_idle={})",
             seq,
             sessions.len()
         );
     }
-    
+
     /// Get current number of idle sessions
     pub async fn idle_count(&self) -> usize {
         self.idle_sessions.read().await.len()
     }
-    
+
     /// Clean up expired idle sessions
     pub async fn cleanup_expired(&self) {
         let now = Instant::now();
         let mut sessions = self.idle_sessions.write().await;
-        
+
         if sessions.is_empty() {
             return;
         }
-        
+
         let initial_count = sessions.len();
         let mut to_remove = Vec::new();
         let mut active_count = 0;
-        
+
         // Iterate from oldest to newest (ascending seq order)
         for (seq, pooled) in sessions.iter() {
             let idle_duration = now.duration_since(pooled.idle_since);
-            
+
             // Keep sessions that haven't expired
             if idle_duration < self.config.idle_timeout {
                 active_count += 1;
                 continue;
             }
-            
+
             // Keep at least min_idle_sessions
             if active_count < self.config.min_idle_sessions {
                 active_count += 1;
@@ -168,7 +168,7 @@ impl SessionPool {
                 );
                 continue;
             }
-            
+
             // Mark for removal
             tracing::debug!(
                 "[SessionPool] 🗑️ Marking session for cleanup (seq={}, idle_for={:.1}s)",
@@ -177,7 +177,7 @@ impl SessionPool {
             );
             to_remove.push(*seq);
         }
-        
+
         // Remove expired sessions
         for seq in &to_remove {
             if let Some(pooled) = sessions.remove(seq) {
@@ -187,7 +187,7 @@ impl SessionPool {
                 }
             }
         }
-        
+
         if !to_remove.is_empty() {
             tracing::info!(
                 "[SessionPool] 🧹 Cleaned up {} expired sessions ({} → {} idle)",
@@ -197,7 +197,7 @@ impl SessionPool {
             );
         }
     }
-    
+
     /// Start automatic cleanup task
     fn start_cleanup_task(&self) {
         let idle_sessions = Arc::clone(&self.idle_sessions);
@@ -205,56 +205,60 @@ impl SessionPool {
         let idle_timeout = self.config.idle_timeout;
         let min_idle = self.config.min_idle_sessions;
         let cleanup_task_handle = Arc::clone(&self.cleanup_task);
-        
+
         let handle = tokio::spawn(async move {
             let mut interval_timer = interval(check_interval);
-            
+
             tracing::info!(
                 "[SessionPool] 🔄 Cleanup task started (interval={:?}, timeout={:?}, min_idle={})",
                 check_interval,
                 idle_timeout,
                 min_idle
             );
-            
+
             loop {
                 interval_timer.tick().await;
-                
+
                 // Perform cleanup
                 let now = Instant::now();
                 let mut sessions = idle_sessions.write().await;
-                
+
                 if sessions.is_empty() {
                     continue;
                 }
-                
+
                 let mut to_remove = Vec::new();
                 let mut active_count = 0;
-                
+
                 for (seq, pooled) in sessions.iter() {
                     let idle_duration = now.duration_since(pooled.idle_since);
-                    
+
                     if idle_duration < idle_timeout {
                         active_count += 1;
                         continue;
                     }
-                    
+
                     if active_count < min_idle {
                         active_count += 1;
                         continue;
                     }
-                    
+
                     to_remove.push(*seq);
                 }
-                
+
                 if !to_remove.is_empty() {
                     for seq in &to_remove {
                         if let Some(pooled) = sessions.remove(seq) {
                             if let Err(e) = pooled.session.close().await {
-                                tracing::warn!("[SessionPool] Failed to close session {}: {}", seq, e);
+                                tracing::warn!(
+                                    "[SessionPool] Failed to close session {}: {}",
+                                    seq,
+                                    e
+                                );
                             }
                         }
                     }
-                    
+
                     tracing::info!(
                         "[SessionPool] 🧹 Auto-cleanup: removed {} expired sessions",
                         to_remove.len()
@@ -262,13 +266,13 @@ impl SessionPool {
                 }
             }
         });
-        
+
         // Store the handle
         if let Ok(mut task) = cleanup_task_handle.try_lock() {
             *task = Some(handle);
         };
     }
-    
+
     /// Stop cleanup task (called on drop)
     pub async fn stop_cleanup_task(&self) {
         let mut task_guard = self.cleanup_task.lock().await;
@@ -294,7 +298,7 @@ impl Drop for SessionPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_default_config() {
         let config = SessionPoolConfig::default();
@@ -302,7 +306,7 @@ mod tests {
         assert_eq!(config.idle_timeout, Duration::from_secs(60));
         assert_eq!(config.min_idle_sessions, 1);
     }
-    
+
     #[test]
     fn test_custom_config() {
         let config = SessionPoolConfig {
@@ -310,30 +314,30 @@ mod tests {
             idle_timeout: Duration::from_secs(30),
             min_idle_sessions: 5,
         };
-        
+
         assert_eq!(config.check_interval, Duration::from_secs(10));
         assert_eq!(config.idle_timeout, Duration::from_secs(30));
         assert_eq!(config.min_idle_sessions, 5);
     }
-    
+
     #[tokio::test]
     async fn test_session_pool_creation() {
         let pool = SessionPool::new();
         assert_eq!(pool.idle_count().await, 0);
     }
-    
+
     #[tokio::test]
     async fn test_next_seq() {
         let pool = SessionPool::new();
         let seq1 = pool.next_seq();
         let seq2 = pool.next_seq();
         let seq3 = pool.next_seq();
-        
+
         assert_eq!(seq1, 1);
         assert_eq!(seq2, 2);
         assert_eq!(seq3, 3);
     }
-    
+
     #[tokio::test]
     async fn test_get_idle_session_empty() {
         let pool = SessionPool::new();

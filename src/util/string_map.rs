@@ -53,13 +53,13 @@ impl StringMap {
     pub fn from_bytes(data: &[u8]) -> Self {
         let mut map = HashMap::new();
         let text = String::from_utf8_lossy(data);
-        
+
         for line in text.lines() {
             if let Some((key, value)) = line.split_once('=') {
                 map.insert(key.trim().to_string(), value.trim().to_string());
             }
         }
-        
+
         Self(map)
     }
 
@@ -104,7 +104,7 @@ mod tests {
         let mut map = StringMap::new();
         map.insert("key1", "value1");
         map.insert("key2", "value2");
-        
+
         assert_eq!(map.get("key1"), Some(&"value1".to_string()));
         assert_eq!(map.get("key2"), Some(&"value2".to_string()));
         assert_eq!(map.len(), 2);
@@ -115,12 +115,11 @@ mod tests {
         let mut map = StringMap::new();
         map.insert("v", "2");
         map.insert("client", "anytls-rs/0.1.0");
-        
+
         let bytes = map.to_bytes();
         let restored = StringMap::from_bytes(&bytes);
-        
+
         assert_eq!(restored.get("v"), Some(&"2".to_string()));
         assert_eq!(restored.get("client"), Some(&"anytls-rs/0.1.0".to_string()));
     }
 }
-

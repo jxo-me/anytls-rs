@@ -4,7 +4,7 @@
 
 use crate::client::Client;
 use crate::util::{AnyTlsError, Result};
-use bytes::{Bytes, BytesMut, BufMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
@@ -16,14 +16,14 @@ pub const UDP_OVER_TCP_MAGIC_ADDR: &str = "sp.v2.udp-over-tcp.arpa";
 
 impl Client {
     /// Create a UDP over TCP proxy connection
-    /// 
+    ///
     /// This creates a special stream to the magic address "sp.v2.udp-over-tcp.arpa"
     /// and then sends the actual UDP target address in the initial request.
-    /// 
+    ///
     /// # Arguments
     /// * `local_addr` - Local address to bind UDP socket to (e.g. "127.0.0.1:0")
     /// * `target_addr` - Target UDP server address
-    /// 
+    ///
     /// # Returns
     /// Local UDP socket address that the application should connect to
     pub async fn create_udp_proxy(
@@ -36,59 +36,65 @@ impl Client {
             local_addr,
             target_addr
         );
-        
+
         // Step 1: Create a stream to the magic address
         let magic_destination = (UDP_OVER_TCP_MAGIC_ADDR.to_string(), 0);
         let (stream, _session) = self.create_proxy_stream(magic_destination).await?;
-        
-        tracing::info!("[UDP Client] Created stream {} for UDP over TCP", stream.id());
-        
+
+        tracing::info!(
+            "[UDP Client] Created stream {} for UDP over TCP",
+            stream.id()
+        );
+
         // Step 2: Send initial request (isConnect + target address)
         let initial_request = encode_initial_request(target_addr)?;
-        
+
         tracing::debug!(
             "[UDP Client] Sending initial request ({} bytes) for stream {}",
             initial_request.len(),
             stream.id()
         );
-        
+
         // Send the initial request
-        stream.send_data(initial_request).map_err(|e| {
-            AnyTlsError::Protocol(format!("Failed to send initial request: {}", e))
-        })?;
-        
-        tracing::info!("[UDP Client] Initial request sent to stream {}", stream.id());
-        
+        stream
+            .send_data(initial_request)
+            .map_err(|e| AnyTlsError::Protocol(format!("Failed to send initial request: {}", e)))?;
+
+        tracing::info!(
+            "[UDP Client] Initial request sent to stream {}",
+            stream.id()
+        );
+
         // Step 3: Create local UDP socket
         let local_udp = UdpSocket::bind(local_addr).await.map_err(|e| {
             tracing::error!("[UDP Client] Failed to bind UDP socket: {}", e);
             AnyTlsError::Io(e)
         })?;
-        
+
         let bound_addr = local_udp.local_addr()?;
         tracing::info!("[UDP Client] Local UDP socket bound to {}", bound_addr);
-        
+
         // Step 4: Start bidirectional forwarding
         let stream_clone = stream.clone();
-        
+
         tokio::spawn(async move {
             if let Err(e) = udp_proxy_loop(local_udp, stream_clone).await {
                 tracing::error!("[UDP Client] Proxy loop error: {}", e);
             }
         });
-        
+
         tracing::info!(
             "[UDP Client] UDP proxy started: {} <-> {}",
             bound_addr,
             target_addr
         );
-        
+
         Ok(bound_addr)
     }
 }
 
 /// Encode initial request for UDP over TCP v2
-/// 
+///
 /// Format:
 /// ```text
 /// | isConnect | ATYP | Address | Port |
@@ -96,10 +102,10 @@ impl Client {
 /// ```
 fn encode_initial_request(target: SocketAddr) -> Result<Bytes> {
     let mut buf = BytesMut::new();
-    
+
     // isConnect = 1 (use Connect format)
     buf.put_u8(1);
-    
+
     // Encode target address in SOCKS5 format
     match target {
         SocketAddr::V4(addr) => {
@@ -113,19 +119,16 @@ fn encode_initial_request(target: SocketAddr) -> Result<Bytes> {
             buf.put_u16(addr.port());
         }
     }
-    
+
     Ok(buf.freeze())
 }
 
 /// Main UDP proxy loop: bidirectional forwarding between local UDP and remote stream
-async fn udp_proxy_loop(
-    local_udp: UdpSocket,
-    stream: Arc<crate::session::Stream>,
-) -> Result<()> {
+async fn udp_proxy_loop(local_udp: UdpSocket, stream: Arc<crate::session::Stream>) -> Result<()> {
     let stream_id = stream.id();
-    
+
     tracing::debug!("[UDP Client] Starting proxy loop for stream {}", stream_id);
-    
+
     // Bidirectional forwarding
     tokio::select! {
         result = udp_to_stream(&local_udp, &stream) => {
@@ -141,21 +144,21 @@ async fn udp_proxy_loop(
             }
         }
     }
-    
+
     Ok(())
 }
 
 /// UDP → Stream: Read from local UDP, encode and send to stream
-async fn udp_to_stream(
-    udp: &UdpSocket,
-    stream: &Arc<crate::session::Stream>,
-) -> Result<()> {
+async fn udp_to_stream(udp: &UdpSocket, stream: &Arc<crate::session::Stream>) -> Result<()> {
     let stream_id = stream.id();
-    
-    tracing::debug!("[UDP Client] UDP → Stream task started for stream {}", stream_id);
-    
+
+    tracing::debug!(
+        "[UDP Client] UDP → Stream task started for stream {}",
+        stream_id
+    );
+
     let mut buf = vec![0u8; MAX_UDP_PACKET_SIZE];
-    
+
     loop {
         // Receive from local UDP
         let (len, addr) = match udp.recv_from(&mut buf).await {
@@ -165,12 +168,12 @@ async fn udp_to_stream(
                 return Err(AnyTlsError::Io(e));
             }
         };
-        
+
         tracing::trace!("[UDP Client] UDP → Stream: {} bytes from {}", len, addr);
-        
+
         // Encode packet: Length (2 bytes) + Data
         let packet = encode_udp_packet(&buf[..len])?;
-        
+
         // Send to stream
         stream.send_data(packet).map_err(|e| {
             tracing::error!("[UDP Client] Failed to send to stream: {}", e);
@@ -180,23 +183,23 @@ async fn udp_to_stream(
 }
 
 /// Stream → UDP: Read from stream, decode and send to local UDP
-async fn stream_to_udp(
-    udp: &UdpSocket,
-    stream: &Arc<crate::session::Stream>,
-) -> Result<()> {
+async fn stream_to_udp(udp: &UdpSocket, stream: &Arc<crate::session::Stream>) -> Result<()> {
     let stream_id = stream.id();
     let reader = stream.reader();
-    
-    tracing::debug!("[UDP Client] Stream → UDP task started for stream {}", stream_id);
-    
+
+    tracing::debug!(
+        "[UDP Client] Stream → UDP task started for stream {}",
+        stream_id
+    );
+
     // We need to track the peer address for sending back
     // In a real implementation, the first packet might contain address info
     // For now, we'll just send to a fixed address or handle it differently
     let peer_addr: Option<SocketAddr> = None;
-    
+
     loop {
         let mut reader_guard = reader.lock().await;
-        
+
         // Read one UDP packet (Length + Data format)
         let payload = match read_udp_packet(&mut reader_guard).await {
             Ok(data) => data,
@@ -209,16 +212,16 @@ async fn stream_to_udp(
                 return Err(e);
             }
         };
-        
+
         drop(reader_guard);
-        
+
         if payload.is_empty() {
             tracing::debug!("[UDP Client] Empty packet, stream might be closed");
             break;
         }
-        
+
         tracing::trace!("[UDP Client] Stream → UDP: {} bytes", payload.len());
-        
+
         // For client side, we need to send back to the original requester
         // If we don't have a peer address yet, this is an error
         // In practice, the local UDP socket should have been connected or
@@ -229,11 +232,11 @@ async fn stream_to_udp(
             tracing::warn!("[UDP Client] No peer address known, packet will be dropped");
             continue;
         }
-        
+
         // Send to local UDP
         if let Some(addr) = peer_addr {
             let sent = udp.send_to(&payload, addr).await?;
-            
+
             if sent != payload.len() {
                 tracing::warn!(
                     "[UDP Client] Partial UDP send: {} / {} bytes",
@@ -243,71 +246,75 @@ async fn stream_to_udp(
             }
         }
     }
-    
+
     Ok(())
 }
 
 /// Read one UDP packet from stream
-/// 
+///
 /// Format: | Length (2 bytes BE) | Payload |
 async fn read_udp_packet(reader: &mut crate::session::StreamReader) -> Result<Vec<u8>> {
     // Read 2-byte length (Big-Endian)
     let mut len_buf = [0u8; 2];
-    reader.read_exact(&mut len_buf).await.map_err(|e| {
-        AnyTlsError::Io(e)
-    })?;
-    
+    reader
+        .read_exact(&mut len_buf)
+        .await
+        .map_err(|e| AnyTlsError::Io(e))?;
+
     let len = u16::from_be_bytes(len_buf) as usize;
-    
+
     if len == 0 {
         return Ok(Vec::new());
     }
-    
+
     if len > MAX_UDP_PACKET_SIZE {
-        return Err(AnyTlsError::Protocol(
-            format!("UDP packet too large: {} bytes", len)
-        ));
+        return Err(AnyTlsError::Protocol(format!(
+            "UDP packet too large: {} bytes",
+            len
+        )));
     }
-    
+
     // Read the actual payload
     let mut data = vec![0u8; len];
-    reader.read_exact(&mut data).await.map_err(|e| {
-        AnyTlsError::Io(e)
-    })?;
-    
+    reader
+        .read_exact(&mut data)
+        .await
+        .map_err(|e| AnyTlsError::Io(e))?;
+
     Ok(data)
 }
 
 /// Encode UDP packet (simple format)
-/// 
+///
 /// Format: | Length (2 bytes BE) | Payload |
 fn encode_udp_packet(payload: &[u8]) -> Result<Bytes> {
     let mut buf = BytesMut::new();
-    
+
     if payload.len() > MAX_UDP_PACKET_SIZE {
-        return Err(AnyTlsError::Protocol(
-            format!("UDP packet too large: {} bytes", payload.len())
-        ));
+        return Err(AnyTlsError::Protocol(format!(
+            "UDP packet too large: {} bytes",
+            payload.len()
+        )));
     }
-    
+
     // Write length (2 bytes, Big-Endian)
     buf.put_u16(payload.len() as u16);
-    
+
     // Write payload
     buf.put_slice(payload);
-    
+
     Ok(buf.freeze())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_encode_initial_request_ipv4() {
         let addr: SocketAddr = "8.8.8.8:53".parse().unwrap();
         let encoded = encode_initial_request(addr).unwrap();
-        
+
         // Should be: isConnect (1) + ATYP (1) + IPv4 (4) + Port (2) = 8 bytes
         assert_eq!(encoded.len(), 8);
         assert_eq!(encoded[0], 1); // isConnect = 1
@@ -315,31 +322,30 @@ mod tests {
         assert_eq!(&encoded[2..6], &[8, 8, 8, 8]); // IP
         assert_eq!(u16::from_be_bytes([encoded[6], encoded[7]]), 53); // Port
     }
-    
+
     #[test]
     fn test_encode_initial_request_ipv6() {
         let addr: SocketAddr = "[2001:4860:4860::8888]:53".parse().unwrap();
         let encoded = encode_initial_request(addr).unwrap();
-        
+
         // Should be: isConnect (1) + ATYP (1) + IPv6 (16) + Port (2) = 20 bytes
         assert_eq!(encoded.len(), 20);
         assert_eq!(encoded[0], 1); // isConnect = 1
         assert_eq!(encoded[1], 0x04); // IPv6
         assert_eq!(u16::from_be_bytes([encoded[18], encoded[19]]), 53); // Port
     }
-    
+
     #[test]
     fn test_encode_udp_packet() {
         let payload = b"Hello, UDP!";
         let encoded = encode_udp_packet(payload).unwrap();
-        
+
         // Check length prefix
         let len = u16::from_be_bytes([encoded[0], encoded[1]]) as usize;
         assert_eq!(len, payload.len());
         assert_eq!(encoded.len(), 2 + payload.len());
-        
+
         // Check payload
         assert_eq!(&encoded[2..], payload);
     }
 }
-

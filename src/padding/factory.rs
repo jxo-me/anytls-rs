@@ -29,7 +29,7 @@ impl PaddingFactory {
     /// Create a new PaddingFactory from raw scheme bytes
     pub fn new(raw_scheme: &[u8]) -> Result<Self, String> {
         let scheme = StringMap::from_bytes(raw_scheme);
-        
+
         let stop = scheme
             .get("stop")
             .ok_or_else(|| "missing 'stop' in padding scheme".to_string())?
@@ -48,7 +48,7 @@ impl PaddingFactory {
     }
 
     /// Get the default padding factory
-    /// 
+    ///
     /// Note: This is not the `Default` trait implementation to avoid confusion
     /// with creating a new factory. This returns a shared singleton instance.
     #[allow(clippy::should_implement_trait)]
@@ -141,7 +141,7 @@ mod tests {
     #[test]
     fn test_generate_sizes() {
         let factory = PaddingFactory::default();
-        
+
         // Packet 0 should be 30-30 (fixed)
         let sizes = factory.generate_record_payload_sizes(0);
         assert_eq!(sizes, vec![30]);
@@ -158,7 +158,7 @@ mod tests {
 2=400-500,c,500-1000"#;
         let factory = PaddingFactory::new(scheme.as_bytes()).unwrap();
         let sizes = factory.generate_record_payload_sizes(2);
-        
+
         assert!(sizes.len() >= 3);
         assert!(sizes[0] >= 400 && sizes[0] <= 500);
         assert_eq!(sizes[1], CHECK_MARK);
@@ -169,8 +169,7 @@ mod tests {
     fn test_md5_hash() {
         let factory1 = PaddingFactory::default();
         let factory2 = PaddingFactory::new(DEFAULT_PADDING_SCHEME.as_bytes()).unwrap();
-        
+
         assert_eq!(factory1.md5(), factory2.md5());
     }
 }
-

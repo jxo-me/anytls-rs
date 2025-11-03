@@ -56,19 +56,16 @@ struct Socks5Addr {
 }
 
 /// Start SOCKS5 server that accepts connections and forwards them through Client
-pub async fn start_socks5_server(
-    listen_addr: &str,
-    client: Arc<Client>,
-) -> Result<()> {
+pub async fn start_socks5_server(listen_addr: &str, client: Arc<Client>) -> Result<()> {
     let listener = TcpListener::bind(listen_addr).await?;
-    
+
     tracing::info!("[SOCKS5] Listening on {}", listen_addr);
-    
+
     loop {
         match listener.accept().await {
             Ok((stream, addr)) => {
                 tracing::debug!("[SOCKS5] New connection from {}", addr);
-                
+
                 let client_clone = Arc::clone(&client);
                 tokio::spawn(async move {
                     if let Err(e) = handle_socks5_connection(stream, client_clone).await {
@@ -92,131 +89,219 @@ async fn handle_socks5_connection(
     tracing::info!("[SOCKS5] 🔐 Starting authentication negotiation");
     authenticate(&mut client_conn).await?;
     tracing::info!("[SOCKS5] ✅ Authentication completed");
-    
+
     // Step 2: Read connection request
     tracing::info!("[SOCKS5] 📖 Reading connection request");
     let (dest_addr, _cmd) = read_connection_request(&mut client_conn).await?;
-    tracing::info!("[SOCKS5] ✅ Connection request: {}:{}", dest_addr.addr, dest_addr.port);
-    
+    tracing::info!(
+        "[SOCKS5] ✅ Connection request: {}:{}",
+        dest_addr.addr,
+        dest_addr.port
+    );
+
     // Step 3: Create proxy connection through AnyTLS
-    tracing::info!("[SOCKS5] 🔗 Creating proxy stream to {}:{}", dest_addr.addr, dest_addr.port);
-    let (proxy_stream, session) = match client.create_proxy_stream((dest_addr.addr.clone(), dest_addr.port)).await {
+    tracing::info!(
+        "[SOCKS5] 🔗 Creating proxy stream to {}:{}",
+        dest_addr.addr,
+        dest_addr.port
+    );
+    let (proxy_stream, session) = match client
+        .create_proxy_stream((dest_addr.addr.clone(), dest_addr.port))
+        .await
+    {
         Ok((stream, sess)) => {
-            tracing::info!("[SOCKS5] ✅ Proxy stream created successfully for {}:{}, stream_id={}", dest_addr.addr, dest_addr.port, stream.id());
+            tracing::info!(
+                "[SOCKS5] ✅ Proxy stream created successfully for {}:{}, stream_id={}",
+                dest_addr.addr,
+                dest_addr.port,
+                stream.id()
+            );
             tracing::info!("[SOCKS5] 📊 Session status: closed={}", sess.is_closed());
             (stream, sess)
         }
         Err(e) => {
-            tracing::error!("[SOCKS5] Failed to create proxy stream to {}:{}: {}", dest_addr.addr, dest_addr.port, e);
+            tracing::error!(
+                "[SOCKS5] Failed to create proxy stream to {}:{}: {}",
+                dest_addr.addr,
+                dest_addr.port,
+                e
+            );
             // Try to provide more helpful error messages
             let error_str = format!("{}", e);
-            if error_str.contains("lookup") || error_str.contains("DNS") || error_str.contains("Try again") {
+            if error_str.contains("lookup")
+                || error_str.contains("DNS")
+                || error_str.contains("Try again")
+            {
                 tracing::error!("[SOCKS5] DNS resolution failed. Server address may be incorrect or unreachable.");
                 tracing::error!("[SOCKS5] Check: 1) Server is running, 2) Server address is correct, 3) Network connectivity");
             }
-            send_connection_reply(&mut client_conn, REPLY_GENERAL_FAILURE, dest_addr.clone()).await?;
+            send_connection_reply(&mut client_conn, REPLY_GENERAL_FAILURE, dest_addr.clone())
+                .await?;
             return Err(e);
         }
     };
     let stream_id = proxy_stream.id();
-    
+
     // Step 4: Send success reply
     tracing::info!("[SOCKS5] 📤 Sending success reply to client");
     send_connection_reply(&mut client_conn, REPLY_SUCCEEDED, dest_addr.clone()).await?;
     tracing::info!("[SOCKS5] ✅ Success reply sent");
-    
+
     // Step 5: Bidirectional data forwarding
-    tracing::info!("[SOCKS5] 🚀 Starting bidirectional data forwarding for stream {}", stream_id);
-    tracing::debug!("[SOCKS5] Session recv_loop should be running: {}", !session.is_closed());
+    tracing::info!(
+        "[SOCKS5] 🚀 Starting bidirectional data forwarding for stream {}",
+        stream_id
+    );
+    tracing::debug!(
+        "[SOCKS5] Session recv_loop should be running: {}",
+        !session.is_closed()
+    );
     let (mut client_read, mut client_write) = tokio::io::split(client_conn);
-    
+
     // ===== 新实现：不再需要 Arc<Mutex<>> 包装！=====
     // 直接克隆 Arc<Stream> 用于两个任务
     let proxy_stream_read = Arc::clone(&proxy_stream);
     let session_for_write: Arc<crate::session::Session> = Arc::clone(&session);
-    
+
     tracing::debug!("[SOCKS5] Spawning Task1 and Task2 for stream {}", stream_id);
-    
+
     let task1 = tokio::spawn(async move {
         tracing::debug!("[SOCKS5-Task1] Task started for stream {}", stream_id);
-        
+
         // 获取 reader 的引用（无需锁整个 stream）
         let reader_mutex = proxy_stream_read.reader();
         let mut buf = vec![0u8; 8192];
         let mut iteration = 0u64;
-        
+
         loop {
             iteration += 1;
-            
+
             // 获取 reader 的锁并读取
             let n = {
                 let mut reader = reader_mutex.lock().await;
                 match reader.read(&mut buf).await {
                     Ok(0) => {
-                        tracing::debug!("[SOCKS5-Task1] Proxy stream EOF (stream_id={}, iteration={})", stream_id, iteration);
+                        tracing::debug!(
+                            "[SOCKS5-Task1] Proxy stream EOF (stream_id={}, iteration={})",
+                            stream_id,
+                            iteration
+                        );
                         break;
                     }
                     Ok(n) => {
-                        tracing::debug!("[SOCKS5-Task1] Read {} bytes from proxy stream (iteration={})", n, iteration);
+                        tracing::debug!(
+                            "[SOCKS5-Task1] Read {} bytes from proxy stream (iteration={})",
+                            n,
+                            iteration
+                        );
                         n
                     }
                     Err(e) => {
-                        tracing::error!("[SOCKS5-Task1] Proxy stream read error: {} (iteration={})", e, iteration);
+                        tracing::error!(
+                            "[SOCKS5-Task1] Proxy stream read error: {} (iteration={})",
+                            e,
+                            iteration
+                        );
                         break;
                     }
                 }
             }; // reader 锁在这里释放
-            
+
             // 写入 SOCKS5 客户端（无锁）
             if client_write.write_all(&buf[..n]).await.is_err() {
-                tracing::error!("[SOCKS5-Task1] Client write error (iteration={})", iteration);
+                tracing::error!(
+                    "[SOCKS5-Task1] Client write error (iteration={})",
+                    iteration
+                );
                 break;
             }
-            
-            tracing::trace!("[SOCKS5-Task1] Forwarded {} bytes to client (iteration={})", n, iteration);
+
+            tracing::trace!(
+                "[SOCKS5-Task1] Forwarded {} bytes to client (iteration={})",
+                n,
+                iteration
+            );
         }
-        
-        tracing::debug!("[SOCKS5-Task1] Task completed for stream {} after {} iterations", stream_id, iteration);
+
+        tracing::debug!(
+            "[SOCKS5-Task1] Task completed for stream {} after {} iterations",
+            stream_id,
+            iteration
+        );
     });
-    
+
     let task2 = tokio::spawn(async move {
-        tracing::debug!("[SOCKS5-Task2] Task spawned, starting client->proxy forwarding for stream {}", stream_id);
+        tracing::debug!(
+            "[SOCKS5-Task2] Task spawned, starting client->proxy forwarding for stream {}",
+            stream_id
+        );
         use bytes::Bytes;
         let mut buf = vec![0u8; 8192];
         let mut iteration = 0u64;
-        
+
         // Yield to ensure task is actually running
         tokio::task::yield_now().await;
-        
+
         loop {
             iteration += 1;
-            tracing::trace!("[SOCKS5-Task2] Iteration {}: Attempting to read from SOCKS5 client", iteration);
-            
+            tracing::trace!(
+                "[SOCKS5-Task2] Iteration {}: Attempting to read from SOCKS5 client",
+                iteration
+            );
+
             let n = match client_read.read(&mut buf).await {
                 Ok(0) => {
-                    tracing::debug!("[SOCKS5-Task2] SOCKS5 client read EOF (iteration {})", iteration);
+                    tracing::debug!(
+                        "[SOCKS5-Task2] SOCKS5 client read EOF (iteration {})",
+                        iteration
+                    );
                     break;
                 }
                 Ok(n) => {
-                    tracing::debug!("[SOCKS5-Task2] Read {} bytes from SOCKS5 client (iteration {})", n, iteration);
+                    tracing::debug!(
+                        "[SOCKS5-Task2] Read {} bytes from SOCKS5 client (iteration {})",
+                        n,
+                        iteration
+                    );
                     // Log first few bytes for debugging (only in trace mode)
                     if iteration == 1 && n > 0 {
                         let preview_len = std::cmp::min(n, 50);
-                        tracing::trace!("[SOCKS5-Task2] First {} bytes: {:?}", preview_len, &buf[..preview_len]);
+                        tracing::trace!(
+                            "[SOCKS5-Task2] First {} bytes: {:?}",
+                            preview_len,
+                            &buf[..preview_len]
+                        );
                     }
                     n
                 }
                 Err(e) => {
-                    tracing::error!("[SOCKS5-Task2] Error reading from SOCKS5 client: {} (iteration {})", e, iteration);
+                    tracing::error!(
+                        "[SOCKS5-Task2] Error reading from SOCKS5 client: {} (iteration {})",
+                        e,
+                        iteration
+                    );
                     break;
                 }
             };
-            
+
             // Use session.write_data_frame to send data without unwrapping Arc<Stream>
-            tracing::debug!("[SOCKS5-Task2] Writing {} bytes to proxy stream {} via session (iteration {})", n, stream_id, iteration);
-            match session_for_write.write_data_frame(stream_id, Bytes::from(buf[..n].to_vec())).await {
+            tracing::debug!(
+                "[SOCKS5-Task2] Writing {} bytes to proxy stream {} via session (iteration {})",
+                n,
+                stream_id,
+                iteration
+            );
+            match session_for_write
+                .write_data_frame(stream_id, Bytes::from(buf[..n].to_vec()))
+                .await
+            {
                 Ok(_) => {
-                    tracing::trace!("[SOCKS5-Task2] Forwarded {} bytes to proxy stream {} (iteration {})", n, stream_id, iteration);
+                    tracing::trace!(
+                        "[SOCKS5-Task2] Forwarded {} bytes to proxy stream {} (iteration {})",
+                        n,
+                        stream_id,
+                        iteration
+                    );
                 }
                 Err(e) => {
                     tracing::error!("[SOCKS5-Task2] Error writing {} bytes to proxy stream {}: {} (iteration {})", n, stream_id, e, iteration);
@@ -224,10 +309,17 @@ async fn handle_socks5_connection(
                 }
             }
         }
-        tracing::debug!("[SOCKS5-Task2] Task2 (client->proxy) finished for stream {} after {} iterations", stream_id, iteration);
+        tracing::debug!(
+            "[SOCKS5-Task2] Task2 (client->proxy) finished for stream {} after {} iterations",
+            stream_id,
+            iteration
+        );
     });
-    
-    tracing::info!("[SOCKS5] Tasks spawned, waiting for completion (stream {})", stream_id);
+
+    tracing::info!(
+        "[SOCKS5] Tasks spawned, waiting for completion (stream {})",
+        stream_id
+    );
     let (result1, result2) = tokio::join!(task1, task2);
     tracing::info!("[SOCKS5] Both tasks completed for stream {}", stream_id);
     if let Err(e) = result1 {
@@ -236,8 +328,12 @@ async fn handle_socks5_connection(
     if let Err(e) = result2 {
         tracing::error!("[SOCKS5] Task2 error: {:?}", e);
     }
-    
-    tracing::info!("[SOCKS5] Connection to {}:{} closed", dest_addr.addr, dest_addr.port);
+
+    tracing::info!(
+        "[SOCKS5] Connection to {}:{} closed",
+        dest_addr.addr,
+        dest_addr.port
+    );
     Ok(())
 }
 
@@ -246,31 +342,40 @@ async fn authenticate(conn: &mut tokio::net::TcpStream) -> Result<()> {
     // Read client greeting: [VER (1) | NMETHODS (1) | METHODS (NMETHODS)]
     let mut buf = [0u8; 2];
     conn.read_exact(&mut buf).await?;
-    
+
     let version = buf[0];
     if version != SOCKS5_VERSION {
-        return Err(AnyTlsError::Protocol(format!("Unsupported SOCKS version: {}", version)));
+        return Err(AnyTlsError::Protocol(format!(
+            "Unsupported SOCKS version: {}",
+            version
+        )));
     }
-    
+
     let nmethods = buf[1] as usize;
     if nmethods == 0 {
-        return Err(AnyTlsError::Protocol("No authentication methods provided".to_string()));
+        return Err(AnyTlsError::Protocol(
+            "No authentication methods provided".to_string(),
+        ));
     }
-    
+
     let mut methods = vec![0u8; nmethods];
     conn.read_exact(&mut methods).await?;
-    
+
     // Check if NO AUTHENTICATION is supported
     let supports_no_auth = methods.contains(&AUTH_NO_AUTHENTICATION);
-    
+
     // Send server selection: [VER (1) | METHOD (1)]
     if supports_no_auth {
-        conn.write_all(&[SOCKS5_VERSION, AUTH_NO_AUTHENTICATION]).await?;
+        conn.write_all(&[SOCKS5_VERSION, AUTH_NO_AUTHENTICATION])
+            .await?;
     } else {
-        conn.write_all(&[SOCKS5_VERSION, AUTH_NOT_ACCEPTABLE]).await?;
-        return Err(AnyTlsError::Protocol("Client does not support NO AUTHENTICATION".to_string()));
+        conn.write_all(&[SOCKS5_VERSION, AUTH_NOT_ACCEPTABLE])
+            .await?;
+        return Err(AnyTlsError::Protocol(
+            "Client does not support NO AUTHENTICATION".to_string(),
+        ));
     }
-    
+
     Ok(())
 }
 
@@ -280,16 +385,19 @@ async fn read_connection_request(conn: &mut tokio::net::TcpStream) -> Result<(So
     // Read request header: [VER (1) | CMD (1) | RSV (1) | ATYP (1)]
     let mut header = [0u8; 4];
     conn.read_exact(&mut header).await?;
-    
+
     let version = header[0];
     if version != SOCKS5_VERSION {
-        return Err(AnyTlsError::Protocol(format!("Invalid SOCKS version: {}", version)));
+        return Err(AnyTlsError::Protocol(format!(
+            "Invalid SOCKS version: {}",
+            version
+        )));
     }
-    
+
     let cmd = header[1];
     let _rsv = header[2]; // Reserved, should be 0x00
     let atyp = header[3];
-    
+
     // Read address based on ATYP
     let addr = match atyp {
         ATYP_IPV4 => {
@@ -315,18 +423,20 @@ async fn read_connection_request(conn: &mut tokio::net::TcpStream) -> Result<(So
             IpAddr::V6(Ipv6Addr::from(ip_buf)).to_string()
         }
         _ => {
-            return Err(AnyTlsError::Protocol(format!("Unsupported address type: 0x{:02x}", atyp)));
+            return Err(AnyTlsError::Protocol(format!(
+                "Unsupported address type: 0x{:02x}",
+                atyp
+            )));
         }
     };
-    
+
     // Read port (2 bytes, big-endian)
     let mut port_buf = [0u8; 2];
     conn.read_exact(&mut port_buf).await?;
     let port = u16::from_be_bytes(port_buf);
-    
+
     Ok((Socks5Addr { addr, port }, cmd))
 }
-
 
 /// Send SOCKS5 connection reply
 async fn send_connection_reply(
@@ -341,13 +451,16 @@ async fn send_connection_reply(
         reply,
         0x00, // RSV
         ATYP_IPV4,
-        0x00, 0x00, 0x00, 0x00, // BND.ADDR (0.0.0.0)
-        0x00, 0x00, // BND.PORT (0)
+        0x00,
+        0x00,
+        0x00,
+        0x00, // BND.ADDR (0.0.0.0)
+        0x00,
+        0x00, // BND.PORT (0)
     ];
-    
+
     conn.write_all(&reply_buf).await?;
     conn.flush().await?;
-    
+
     Ok(())
 }
-

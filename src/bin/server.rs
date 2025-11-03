@@ -6,7 +6,7 @@ use anytls_rs::server::Server;
 use anytls_rs::util::create_server_config;
 use std::sync::Arc;
 use tokio_rustls::TlsAcceptor;
-use tracing::{info, error};
+use tracing::{error, info};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -33,7 +33,10 @@ async fn main() -> Result<()> {
                 password = Some(args.next().context("Expected password after -p")?);
             }
             "--padding-scheme" => {
-                padding_scheme_file = Some(args.next().context("Expected padding scheme file after --padding-scheme")?);
+                padding_scheme_file = Some(
+                    args.next()
+                        .context("Expected padding scheme file after --padding-scheme")?,
+                );
             }
             "-h" | "--help" => {
                 println!("Usage: anytls-server [OPTIONS]");
@@ -66,22 +69,19 @@ async fn main() -> Result<()> {
     };
 
     // Create TLS config
-    let tls_config = create_server_config()
-        .context("Failed to create TLS server config")?;
+    let tls_config = create_server_config().context("Failed to create TLS server config")?;
     let tls_acceptor = TlsAcceptor::from(tls_config);
 
     info!("[Server] anytls-rs v0.1.0");
     info!("[Server] Listening TCP {}", listen_addr);
 
     // Create and start server
-    let server = Server::new(
-        &password,
-        Arc::new(tls_acceptor),
-        padding,
-    );
+    let server = Server::new(&password, Arc::new(tls_acceptor), padding);
 
     // Start listening
-    server.listen(&listen_addr).await
+    server
+        .listen(&listen_addr)
+        .await
         .context("Failed to start server")?;
 
     Ok(())

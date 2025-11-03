@@ -2,13 +2,13 @@
 //!
 //! Stream provides a duplex communication channel that implements AsyncRead and AsyncWrite
 
-use crate::util::{AnyTlsError, Result};
 use crate::session::StreamReader;
+use crate::util::{AnyTlsError, Result};
 use bytes::Bytes;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::{mpsc, oneshot};
@@ -17,17 +17,17 @@ use tokio::sync::{mpsc, oneshot};
 /// It implements AsyncRead and AsyncWrite to be used as a connection
 pub struct Stream {
     id: u32,
-    
+
     // ===== 读取部分：使用独立的 StreamReader =====
     // Arc<Mutex<>> 是为了在 poll_read 中获取 &mut
     reader: Arc<tokio::sync::Mutex<StreamReader>>,
-    
+
     // ===== 写入部分：直接使用 channel，无需锁 =====
     writer_tx: mpsc::UnboundedSender<(u32, Bytes)>,
-    
+
     // ===== SYNACK 通知 (用于超时检测) =====
     synack_tx: Arc<tokio::sync::Mutex<Option<oneshot::Sender<Result<()>>>>>,
-    
+
     // ===== 状态管理 =====
     is_closed: Arc<AtomicBool>,
     close_error: Arc<tokio::sync::Mutex<Option<AnyTlsError>>>,
@@ -35,12 +35,12 @@ pub struct Stream {
 
 impl Stream {
     /// Create a new stream
-    /// 
+    ///
     /// # Arguments
     /// * `id` - Stream ID
     /// * `reader` - StreamReader 用于读取数据
     /// * `writer_tx` - 发送数据到 Session 的 channel
-    /// 
+    ///
     /// # Returns
     /// (Stream, Receiver) - The receiver can be used to wait for SYNACK
     pub fn new(
@@ -49,7 +49,7 @@ impl Stream {
         writer_tx: mpsc::UnboundedSender<(u32, Bytes)>,
     ) -> (Self, oneshot::Receiver<Result<()>>) {
         let (synack_tx, synack_rx) = oneshot::channel();
-        
+
         let stream = Self {
             id,
             reader: Arc::new(tokio::sync::Mutex::new(reader)),
@@ -58,12 +58,12 @@ impl Stream {
             is_closed: Arc::new(AtomicBool::new(false)),
             close_error: Arc::new(tokio::sync::Mutex::new(None)),
         };
-        
+
         (stream, synack_rx)
     }
-    
+
     /// Notify that SYNACK has been received
-    /// 
+    ///
     /// # Arguments
     /// * `result` - Ok(()) for success, Err for error
     pub async fn notify_synack(&self, result: Result<()>) {
@@ -74,7 +74,11 @@ impl Stream {
                 Err(e) => Err(AnyTlsError::Protocol(e.to_string())),
             };
             let _ = tx.send(result_clone);
-            tracing::debug!("[Stream] SYNACK notified for stream {}: {:?}", self.id, result.is_ok());
+            tracing::debug!(
+                "[Stream] SYNACK notified for stream {}: {:?}",
+                self.id,
+                result.is_ok()
+            );
         } else {
             tracing::warn!("[Stream] SYNACK already notified for stream {}", self.id);
         }
@@ -87,12 +91,11 @@ impl Stream {
 
     /// Close the stream with error (can be called with `Arc<Stream>`)
     pub async fn close_with_error(&self, err: AnyTlsError) {
-        if self.is_closed.compare_exchange(
-            false,
-            true,
-            Ordering::Acquire,
-            Ordering::Relaxed,
-        ).is_ok() {
+        if self
+            .is_closed
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
             *self.close_error.lock().await = Some(err);
         }
     }
@@ -101,16 +104,19 @@ impl Stream {
     pub fn is_closed(&self) -> bool {
         self.is_closed.load(Ordering::Relaxed)
     }
-    
+
     /// Get a reference to the reader (for direct access in handlers)
     pub fn reader(&self) -> &Arc<tokio::sync::Mutex<StreamReader>> {
         &self.reader
     }
-    
+
     /// Send data through the writer channel (无锁方式)
-    /// 
+    ///
     /// 这个方法可以被多个任务并发调用，无需任何锁
-    pub fn send_data(&self, data: Bytes) -> std::result::Result<(), mpsc::error::SendError<(u32, Bytes)>> {
+    pub fn send_data(
+        &self,
+        data: Bytes,
+    ) -> std::result::Result<(), mpsc::error::SendError<(u32, Bytes)>> {
         self.writer_tx.send((self.id, data))
     }
 }
@@ -126,11 +132,11 @@ impl AsyncRead for Stream {
     ) -> Poll<std::io::Result<()>> {
         let stream_id = self.id;
         let remaining = buf.remaining();
-        
+
         // 使用 tokio::task::block_in_place 同步读取
         // 这避免了复杂的 Future polling 和借用问题
         let reader = Arc::clone(&self.reader);
-        
+
         // 创建读取 future
         let mut read_fut = Box::pin(async move {
             let mut reader_guard = reader.lock().await;
@@ -138,7 +144,7 @@ impl AsyncRead for Stream {
             let n = reader_guard.read(&mut temp_buf).await?;
             Ok::<(usize, Vec<u8>), std::io::Error>((n, temp_buf))
         });
-        
+
         // Poll the future
         match read_fut.as_mut().poll(cx) {
             Poll::Ready(Ok((n, temp_buf))) => {
@@ -146,7 +152,8 @@ impl AsyncRead for Stream {
                     buf.put_slice(&temp_buf[..n]);
                     tracing::trace!(
                         "[Stream] poll_read: Read {} bytes (stream_id={})",
-                        n, stream_id
+                        n,
+                        stream_id
                     );
                 }
                 Poll::Ready(Ok(()))
@@ -154,7 +161,8 @@ impl AsyncRead for Stream {
             Poll::Ready(Err(e)) => {
                 tracing::error!(
                     "[Stream] poll_read: Error reading (stream_id={}): {}",
-                    stream_id, e
+                    stream_id,
+                    e
                 );
                 Poll::Ready(Err(e))
             }
@@ -171,8 +179,12 @@ impl AsyncWrite for Stream {
     ) -> Poll<std::io::Result<usize>> {
         let stream_id = self.id;
         let buf_len = buf.len();
-        tracing::trace!("[Stream] poll_write: stream_id={}, buf_len={}", stream_id, buf_len);
-        
+        tracing::trace!(
+            "[Stream] poll_write: stream_id={}, buf_len={}",
+            stream_id,
+            buf_len
+        );
+
         if self.is_closed.load(Ordering::Relaxed) {
             tracing::warn!("[Stream] poll_write: Stream {} is closed", stream_id);
             return Poll::Ready(Err(std::io::Error::new(
@@ -183,10 +195,18 @@ impl AsyncWrite for Stream {
 
         // Send data to session via channel
         let data = Bytes::copy_from_slice(buf);
-        tracing::trace!("[Stream] poll_write: Sending {} bytes to channel for stream {}", buf_len, stream_id);
+        tracing::trace!(
+            "[Stream] poll_write: Sending {} bytes to channel for stream {}",
+            buf_len,
+            stream_id
+        );
         match self.writer_tx.send((self.id, data)) {
             Ok(_) => {
-                tracing::debug!("[Stream] poll_write: Successfully sent {} bytes to channel for stream {}", buf_len, stream_id);
+                tracing::debug!(
+                    "[Stream] poll_write: Successfully sent {} bytes to channel for stream {}",
+                    buf_len,
+                    stream_id
+                );
                 Poll::Ready(Ok(buf.len()))
             }
             Err(e) => {
@@ -215,61 +235,61 @@ mod tests {
     use super::*;
     use crate::session::StreamReader;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    
+
     #[tokio::test]
     async fn test_stream_write() {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let (_reader_tx, reader_rx) = mpsc::unbounded_channel();
-        
+
         let reader = StreamReader::new(1, reader_rx);
         let (mut stream, _synack_rx) = Stream::new(1, reader, tx);
-        
+
         // 写入数据
         stream.write_all(b"hello").await.unwrap();
-        
+
         // 验证数据发送到 channel
         let (stream_id, data) = rx.recv().await.unwrap();
         assert_eq!(stream_id, 1);
         assert_eq!(data.as_ref(), b"hello");
     }
-    
+
     #[tokio::test]
     async fn test_stream_read() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let (reader_tx, reader_rx) = mpsc::unbounded_channel();
-        
+
         let reader = StreamReader::new(1, reader_rx);
         let (mut stream, _synack_rx) = Stream::new(1, reader, tx);
-        
+
         // 发送数据到 reader
         reader_tx.send(Bytes::from("world")).unwrap();
-        
+
         // 读取数据
         let mut buf = vec![0u8; 10];
         let n = stream.read(&mut buf).await.unwrap();
-        
+
         assert_eq!(n, 5);
         assert_eq!(&buf[..n], b"world");
     }
-    
+
     #[tokio::test]
     async fn test_stream_read_write() {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let (reader_tx, reader_rx) = mpsc::unbounded_channel();
-        
+
         let reader = StreamReader::new(1, reader_rx);
         let (mut stream, _synack_rx) = Stream::new(1, reader, tx);
-        
+
         // 同时读写
         reader_tx.send(Bytes::from("input")).unwrap();
         stream.write_all(b"output").await.unwrap();
-        
+
         // 验证读取
         let mut buf = vec![0u8; 10];
         let n = stream.read(&mut buf).await.unwrap();
         assert_eq!(n, 5);
         assert_eq!(&buf[..n], b"input");
-        
+
         // 验证写入
         let (stream_id, data) = rx.recv().await.unwrap();
         assert_eq!(stream_id, 1);

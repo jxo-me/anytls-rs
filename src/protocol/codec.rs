@@ -1,4 +1,4 @@
-use crate::protocol::frame::{Frame, Command, HEADER_OVERHEAD_SIZE};
+use crate::protocol::frame::{Command, Frame, HEADER_OVERHEAD_SIZE};
 use bytes::{BufMut, Bytes, BytesMut};
 use std::io;
 use tokio_util::codec::{Decoder, Encoder};
@@ -12,23 +12,27 @@ impl Decoder for FrameCodec {
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
         use bytes::Buf;
-        
+
         // Need at least header size to decode
         if src.len() < HEADER_OVERHEAD_SIZE {
-            tracing::trace!("[FrameCodec] decode: Not enough data for header (have {}, need {})", src.len(), HEADER_OVERHEAD_SIZE);
+            tracing::trace!(
+                "[FrameCodec] decode: Not enough data for header (have {}, need {})",
+                src.len(),
+                HEADER_OVERHEAD_SIZE
+            );
             return Ok(None);
         }
 
         // Save position before parsing header
         let before_header = src.len();
-        
+
         // Save first few bytes for debugging
         let header_preview = if src.len() >= 20 {
             format!("{:?}", &src[..20])
         } else {
             format!("{:?}", &src[..])
         };
-        
+
         // Parse header WITHOUT consuming bytes (use peek methods)
         // We'll only consume them if we have enough payload
         let mut header_reader = &src[..HEADER_OVERHEAD_SIZE];
@@ -36,15 +40,28 @@ impl Decoder for FrameCodec {
         let cmd = Command::from(cmd_byte);
         let stream_id = header_reader.get_u32();
         let data_len = header_reader.get_u16() as usize;
-        
-        tracing::info!("[FrameCodec] 🔍 decode: Parsing header (buffer had {} bytes, preview: {})", before_header, header_preview);
-        tracing::info!("[FrameCodec] 📋 decode: Parsed header cmd={:?} (byte={}), stream_id={}, data_len={}", 
-            cmd, cmd_byte, stream_id, data_len);
+
+        tracing::info!(
+            "[FrameCodec] 🔍 decode: Parsing header (buffer had {} bytes, preview: {})",
+            before_header,
+            header_preview
+        );
+        tracing::info!(
+            "[FrameCodec] 📋 decode: Parsed header cmd={:?} (byte={}), stream_id={}, data_len={}",
+            cmd,
+            cmd_byte,
+            stream_id,
+            data_len
+        );
 
         // Check if we have enough data (header + payload)
         let total_needed = HEADER_OVERHEAD_SIZE + data_len;
         if src.len() < total_needed {
-            tracing::info!("[FrameCodec] decode: Not enough data for complete frame (have {}, need {})", src.len(), total_needed);
+            tracing::info!(
+                "[FrameCodec] decode: Not enough data for complete frame (have {}, need {})",
+                src.len(),
+                total_needed
+            );
             // Reserve space for the remaining data
             src.reserve(total_needed - src.len());
             return Ok(None);
@@ -52,7 +69,7 @@ impl Decoder for FrameCodec {
 
         // Now consume the header and payload
         src.advance(HEADER_OVERHEAD_SIZE);
-        
+
         // Extract data
         let data = if data_len > 0 {
             src.split_to(data_len).freeze()
@@ -76,7 +93,7 @@ impl Encoder<Frame> for FrameCodec {
 
     fn encode(&mut self, item: Frame, dst: &mut BytesMut) -> Result<(), Self::Error> {
         let data_len = item.data.len();
-        
+
         // Reserve space: header + data
         dst.reserve(HEADER_OVERHEAD_SIZE + data_len);
 
@@ -139,10 +156,9 @@ mod tests {
         buf.put_u8(Command::Push as u8);
         buf.put_u32(789);
         buf.put_u16(100); // Claims 100 bytes data
-        buf.put_u8(0);    // But only 1 byte available
+        buf.put_u8(0); // But only 1 byte available
 
         let result = codec.decode(&mut buf);
         assert!(result.unwrap().is_none()); // Should return None, not error
     }
 }
-

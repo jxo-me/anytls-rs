@@ -49,7 +49,7 @@ fn bench_tls_config_reuse(c: &mut Criterion) {
         // Create config once and reuse
         let server_config = tls::create_server_config().unwrap();
         let client_config = tls::create_client_config(None).unwrap();
-        
+
         b.iter(|| {
             black_box(&server_config);
             black_box(&client_config);
@@ -66,4 +66,3 @@ criterion_group!(
     bench_tls_config_reuse
 );
 criterion_main!(benches);
-

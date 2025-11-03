@@ -19,7 +19,7 @@ impl From<rcgen::Error> for AnyTlsError {
 }
 
 /// Generate a self-signed certificate for testing
-/// 
+///
 /// This generates a certificate similar to the Go version:
 /// - ECDSA P-256 key (default for rcgen, better performance than RSA 2048)
 /// - Valid for reasonable duration (rcgen default, typically 1 year)
@@ -30,26 +30,28 @@ pub fn generate_key_pair() -> Result<(CertificateDer<'static>, PrivateKeyDer<'st
 }
 
 /// Generate a self-signed certificate with a specific server name
-pub fn generate_key_pair_with_name(server_name: Option<&str>) -> Result<(CertificateDer<'static>, PrivateKeyDer<'static>)> {
+pub fn generate_key_pair_with_name(
+    server_name: Option<&str>,
+) -> Result<(CertificateDer<'static>, PrivateKeyDer<'static>)> {
     // Determine server name to use
     let name = server_name.unwrap_or("localhost");
-    
+
     // Use rcgen's simple API to generate self-signed certificate
     // This is the recommended approach for basic use cases
     let subject_alt_names = vec![name.to_string(), "localhost".to_string()];
     let certified_key = rcgen::generate_simple_self_signed(subject_alt_names)?;
-    
+
     // Serialize to DER format
     let cert_der = certified_key.cert.der();
     let key_der = certified_key.signing_key.serialize_der();
-    
+
     // Convert to rustls types
     // CertificateDer implements From<&[u8]>, but we need 'static lifetime
     // So we clone into a Vec<u8> and use it
     let cert_der_vec: Vec<u8> = cert_der.to_vec();
     let cert_der: CertificateDer<'static> = cert_der_vec.into();
     let key_der: PrivateKeyDer<'static> = PrivateKeyDer::Pkcs8(key_der.into());
-    
+
     Ok((cert_der, key_der))
 }
 
@@ -123,16 +125,18 @@ impl rustls::client::danger::ServerCertVerifier for NoCertificateVerification {
 /// This accepts self-signed certificates, similar to Go's InsecureSkipVerify: true
 pub fn create_client_config(_server_name: Option<String>) -> Result<Arc<ClientConfig>> {
     let root_store = RootCertStore::empty();
-    
+
     // For testing, we'll accept any certificate
     // In production, you should load proper root certificates
-    
+
     let mut config = ClientConfig::builder()
         .with_root_certificates(root_store)
         .with_no_client_auth();
-    
+
     // Set custom certificate verifier to accept self-signed certificates
-    config.dangerous().set_certificate_verifier(Arc::new(NoCertificateVerification));
+    config
+        .dangerous()
+        .set_certificate_verifier(Arc::new(NoCertificateVerification));
 
     Ok(Arc::new(config))
 }
@@ -160,7 +164,7 @@ mod tests {
             _ => panic!("Unexpected key type"),
         }
     }
-    
+
     #[test]
     fn test_generate_key_pair_with_name() {
         let (cert, key) = generate_key_pair_with_name(Some("example.com")).unwrap();
@@ -172,7 +176,7 @@ mod tests {
             _ => panic!("Unexpected key type"),
         }
     }
-    
+
     #[test]
     fn test_create_server_config() {
         // Should now succeed

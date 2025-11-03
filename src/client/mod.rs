@@ -1,8 +1,8 @@
 //! Client implementation for AnyTLS protocol
 
-pub mod session_pool;
 #[allow(clippy::module_inception)]
 pub mod client;
+pub mod session_pool;
 pub mod socks5;
 pub mod udp_client;
 
