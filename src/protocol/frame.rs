@@ -3,22 +3,32 @@ use bytes::Bytes;
 /// Frame header size: 1 (cmd) + 4 (stream_id) + 2 (data_len) = 7 bytes
 pub const HEADER_OVERHEAD_SIZE: usize = 7;
 
-/// Command types
+/// Command types for AnyTLS protocol frames
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
-    Waste = 0,              // Paddings
-    Syn = 1,                // stream open
-    Push = 2,               // data push
-    Fin = 3,                // stream close, a.k.a EOF mark
-    Settings = 4,           // Settings (Client send to Server)
-    Alert = 5,              // Alert
-    UpdatePaddingScheme = 6, // update padding scheme
-    // Since version 2
-    SynAck = 7,            // Server reports to the client that the stream has been opened
-    HeartRequest = 8,      // Keep alive command
-    HeartResponse = 9,     // Keep alive command
-    ServerSettings = 10,   // Settings (Server send to client)
+    /// Padding data (waste bytes for traffic obfuscation)
+    Waste = 0,
+    /// Open a new stream
+    Syn = 1,
+    /// Push data through the stream
+    Push = 2,
+    /// Close the stream (EOF mark)
+    Fin = 3,
+    /// Client settings sent to server
+    Settings = 4,
+    /// Alert message
+    Alert = 5,
+    /// Update padding scheme
+    UpdatePaddingScheme = 6,
+    /// Server acknowledges stream open (since protocol version 2)
+    SynAck = 7,
+    /// Keep-alive request
+    HeartRequest = 8,
+    /// Keep-alive response
+    HeartResponse = 9,
+    /// Server settings sent to client (since protocol version 2)
+    ServerSettings = 10,
 }
 
 impl From<u8> for Command {
@@ -49,8 +59,11 @@ impl From<Command> for u8 {
 /// Frame defines a packet from or to be multiplexed into a single connection
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frame {
+    /// Command type
     pub cmd: Command,
+    /// Stream identifier (0 for control frames)
     pub stream_id: u32,
+    /// Frame payload data
     pub data: Bytes,
 }
 

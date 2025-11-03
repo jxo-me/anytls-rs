@@ -56,7 +56,7 @@ impl Stream {
         self.id
     }
 
-    /// Close the stream with error (can be called with Arc<Stream>)
+    /// Close the stream with error (can be called with `Arc<Stream>`)
     pub async fn close_with_error(&self, err: AnyTlsError) {
         if self.is_closed.compare_exchange(
             false,

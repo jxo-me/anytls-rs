@@ -5,30 +5,37 @@ use std::collections::HashMap;
 pub struct StringMap(HashMap<String, String>);
 
 impl StringMap {
+    /// Create a new empty StringMap
     pub fn new() -> Self {
         Self(HashMap::new())
     }
 
+    /// Create a new StringMap with the specified capacity
     pub fn with_capacity(capacity: usize) -> Self {
         Self(HashMap::with_capacity(capacity))
     }
 
+    /// Insert a key-value pair into the map
     pub fn insert(&mut self, key: impl Into<String>, value: impl Into<String>) {
         self.0.insert(key.into(), value.into());
     }
 
+    /// Get a value by key
     pub fn get(&self, key: &str) -> Option<&String> {
         self.0.get(key)
     }
 
+    /// Check if the map contains a key
     pub fn contains_key(&self, key: &str) -> bool {
         self.0.contains_key(key)
     }
 
+    /// Get the number of key-value pairs in the map
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
+    /// Check if the map is empty
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }

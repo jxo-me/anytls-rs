@@ -1,3 +1,4 @@
+/// Padding factory for traffic obfuscation
 pub mod factory;
 
 pub use factory::*;

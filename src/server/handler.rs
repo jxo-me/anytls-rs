@@ -11,6 +11,7 @@ use bytes::Bytes;
 
 /// Handler trait for processing new streams
 pub trait StreamHandler: Send + Sync {
+    /// Handle a new stream
     fn handle_stream(&self, stream: Arc<Stream>, session: Arc<crate::session::Session>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + '_>>;
 }
 
@@ -20,6 +21,7 @@ pub struct TcpProxyHandler {
 }
 
 impl TcpProxyHandler {
+    /// Create a new TCP proxy handler
     pub fn new() -> Self {
         Self {}
     }
