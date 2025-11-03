@@ -105,8 +105,6 @@ pub async fn handle_udp_over_tcp(
 /// 
 /// Returns the target SocketAddr
 async fn read_initial_request(reader: &mut StreamReader) -> Result<SocketAddr> {
-    use tokio::io::AsyncReadExt as _;
-    
     // Read isConnect (1 byte)
     let mut is_connect_buf = [0u8; 1];
     reader.read_exact(&mut is_connect_buf).await.map_err(|e| {

@@ -251,8 +251,6 @@ async fn stream_to_udp(
 /// 
 /// Format: | Length (2 bytes BE) | Payload |
 async fn read_udp_packet(reader: &mut crate::session::StreamReader) -> Result<Vec<u8>> {
-    use tokio::io::AsyncReadExt;
-    
     // Read 2-byte length (Big-Endian)
     let mut len_buf = [0u8; 2];
     reader.read_exact(&mut len_buf).await.map_err(|e| {
