@@ -1,5 +1,5 @@
 use crate::protocol::frame::{Frame, Command, HEADER_OVERHEAD_SIZE};
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use std::io;
 use tokio_util::codec::{Decoder, Encoder};
 

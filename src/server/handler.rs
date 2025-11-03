@@ -48,27 +48,21 @@ struct SocksAddr {
 
 /// Read SOCKS5 address format from stream
 /// Format: [ATYP (1 byte) | ADDR (variable) | PORT (2 bytes)]
-/// Uses Mutex to get mutable access to Stream for AsyncReadExt methods
+/// 
+/// 新实现：直接使用 StreamReader，无需额外的 Mutex 包装
 async fn read_socks_addr(stream: Arc<Stream>) -> Result<SocksAddr> {
     let stream_id = stream.id();
     tracing::info!("[Proxy] 📖 read_socks_addr: Starting to read SOCKS5 address from stream {}", stream_id);
     
-    // We can't unwrap Arc because Session also holds a reference
-    // Wrap Arc<Stream> in Mutex for safe mutable access
-    let stream_mutex = Arc::new(tokio::sync::Mutex::new(stream));
+    // 获取 reader 的引用
+    let reader_mutex = stream.reader();
     
     // Read ATYP byte first
     tracing::info!("[Proxy] 📖 read_socks_addr: Reading ATYP byte from stream {}", stream_id);
     let mut atyp_buf = [0u8; 1];
     {
-        tracing::trace!("[Proxy] read_socks_addr: Acquiring stream lock for ATYP (stream {})", stream_id);
-        let stream_arc = stream_mutex.lock().await;
-        use std::pin::Pin;
-        let stream_ptr = Arc::as_ptr(&stream_arc);
-        let stream_mut_ptr = stream_ptr as *mut Stream;
-        let stream_ref: &mut Stream = unsafe { &mut *stream_mut_ptr };
-        let mut pinned = unsafe { Pin::new_unchecked(stream_ref) };
-        AsyncReadExt::read_exact(&mut pinned, &mut atyp_buf).await
+        let mut reader = reader_mutex.lock().await;
+        reader.read(&mut atyp_buf).await
             .map_err(|e| AnyTlsError::Protocol(format!("Failed to read address type: {}", e)))?;
     }
     tracing::info!("[Proxy] ✅ read_socks_addr: Read ATYP={:02x} from stream {}", atyp_buf[0], stream_id);
@@ -80,14 +74,8 @@ async fn read_socks_addr(stream: Arc<Stream>) -> Result<SocksAddr> {
             tracing::info!("[Proxy] 📖 read_socks_addr: Reading IPv4 address (stream {})", stream_id);
             let mut ip_buf = [0u8; 4];
             {
-                tracing::trace!("[Proxy] read_socks_addr: Acquiring stream lock for IPv4 (stream {})", stream_id);
-                let stream_arc = stream_mutex.lock().await;
-                use std::pin::Pin;
-                let stream_ptr = Arc::as_ptr(&stream_arc);
-                let stream_mut_ptr = stream_ptr as *mut Stream;
-                let stream_ref: &mut Stream = unsafe { &mut *stream_mut_ptr };
-                let mut pinned = unsafe { Pin::new_unchecked(stream_ref) };
-                AsyncReadExt::read_exact(&mut pinned, &mut ip_buf).await
+                let mut reader = reader_mutex.lock().await;
+                reader.read_exact(&mut ip_buf).await
                     .map_err(|e| AnyTlsError::Protocol(format!("Failed to read IPv4: {}", e)))?;
             }
             IpAddr::V4(Ipv4Addr::from(ip_buf)).to_string()
@@ -97,14 +85,8 @@ async fn read_socks_addr(stream: Arc<Stream>) -> Result<SocksAddr> {
             tracing::info!("[Proxy] 📖 read_socks_addr: Reading domain name (stream {})", stream_id);
             let mut len_buf = [0u8; 1];
             {
-                tracing::trace!("[Proxy] read_socks_addr: Acquiring stream lock for domain length (stream {})", stream_id);
-                let stream_arc = stream_mutex.lock().await;
-                use std::pin::Pin;
-                let stream_ptr = Arc::as_ptr(&stream_arc);
-                let stream_mut_ptr = stream_ptr as *mut Stream;
-                let stream_ref: &mut Stream = unsafe { &mut *stream_mut_ptr };
-                let mut pinned = unsafe { Pin::new_unchecked(stream_ref) };
-                AsyncReadExt::read_exact(&mut pinned, &mut len_buf).await
+                let mut reader = reader_mutex.lock().await;
+                reader.read_exact(&mut len_buf).await
                     .map_err(|e| AnyTlsError::Protocol(format!("Failed to read domain length: {}", e)))?;
             }
             
@@ -116,14 +98,8 @@ async fn read_socks_addr(stream: Arc<Stream>) -> Result<SocksAddr> {
             
             let mut domain_buf = vec![0u8; domain_len];
             {
-                tracing::trace!("[Proxy] read_socks_addr: Acquiring stream lock for domain (stream {})", stream_id);
-                let stream_arc = stream_mutex.lock().await;
-                use std::pin::Pin;
-                let stream_ptr = Arc::as_ptr(&stream_arc);
-                let stream_mut_ptr = stream_ptr as *mut Stream;
-                let stream_ref: &mut Stream = unsafe { &mut *stream_mut_ptr };
-                let mut pinned = unsafe { Pin::new_unchecked(stream_ref) };
-                AsyncReadExt::read_exact(&mut pinned, &mut domain_buf).await
+                let mut reader = reader_mutex.lock().await;
+                reader.read_exact(&mut domain_buf).await
                     .map_err(|e| AnyTlsError::Protocol(format!("Failed to read domain: {}", e)))?;
             }
             
@@ -135,14 +111,8 @@ async fn read_socks_addr(stream: Arc<Stream>) -> Result<SocksAddr> {
             tracing::info!("[Proxy] 📖 read_socks_addr: Reading IPv6 address (stream {})", stream_id);
             let mut ip_buf = [0u8; 16];
             {
-                tracing::trace!("[Proxy] read_socks_addr: Acquiring stream lock for IPv6 (stream {})", stream_id);
-                let stream_arc = stream_mutex.lock().await;
-                use std::pin::Pin;
-                let stream_ptr = Arc::as_ptr(&stream_arc);
-                let stream_mut_ptr = stream_ptr as *mut Stream;
-                let stream_ref: &mut Stream = unsafe { &mut *stream_mut_ptr };
-                let mut pinned = unsafe { Pin::new_unchecked(stream_ref) };
-                AsyncReadExt::read_exact(&mut pinned, &mut ip_buf).await
+                let mut reader = reader_mutex.lock().await;
+                reader.read_exact(&mut ip_buf).await
                     .map_err(|e| AnyTlsError::Protocol(format!("Failed to read IPv6: {}", e)))?;
             }
             IpAddr::V6(Ipv6Addr::from(ip_buf)).to_string()
@@ -156,14 +126,8 @@ async fn read_socks_addr(stream: Arc<Stream>) -> Result<SocksAddr> {
     tracing::info!("[Proxy] 📖 read_socks_addr: Reading port (stream {})", stream_id);
     let mut port_buf = [0u8; 2];
     {
-        tracing::trace!("[Proxy] read_socks_addr: Acquiring stream lock for port (stream {})", stream_id);
-        let stream_arc = stream_mutex.lock().await;
-        use std::pin::Pin;
-        let stream_ptr = Arc::as_ptr(&stream_arc);
-        let stream_mut_ptr = stream_ptr as *mut Stream;
-        let stream_ref: &mut Stream = unsafe { &mut *stream_mut_ptr };
-        let mut pinned = unsafe { Pin::new_unchecked(stream_ref) };
-        AsyncReadExt::read_exact(&mut pinned, &mut port_buf).await
+        let mut reader = reader_mutex.lock().await;
+        reader.read_exact(&mut port_buf).await
             .map_err(|e| AnyTlsError::Protocol(format!("Failed to read port: {}", e)))?;
     }
     let port = u16::from_be_bytes(port_buf);
@@ -231,168 +195,116 @@ async fn proxy_tcp_connection_with_synack(
 }
 
 /// Forward data between stream and outbound connection
+/// 
+/// 新实现：完全移除 Mutex 包装，直接使用 Stream
+/// Stream 内部的 reader 和 writer 已经分离，无锁竞争
 async fn proxy_tcp_connection_data_forwarding(
     stream: Arc<Stream>,
     outbound: TcpStream,
     destination: SocksAddr,
 ) -> Result<()> {
-    let stream_id_for_log = stream.id();
+    let stream_id = stream.id();
     tracing::info!("[Proxy] Starting data forwarding for stream {} to {}:{}", 
-        stream_id_for_log, destination.addr, destination.port);
+        stream_id, destination.addr, destination.port);
     
-    // Split the outbound connection for bidirectional copying
+    // 分离 outbound 的读写
     let (mut outbound_read, mut outbound_write) = tokio::io::split(outbound);
     
-    // Wrap Arc<Stream> in Mutex for safe mutable access
-    let stream_mutex = Arc::new(tokio::sync::Mutex::new(stream));
-    let stream_read = Arc::clone(&stream_mutex);
-    let stream_write = Arc::clone(&stream_mutex);
+    // ===== 关键改变：不再需要 Arc<Mutex<>> 包装！=====
+    // 直接克隆 Arc<Stream> 用于两个任务
+    let stream_for_read = Arc::clone(&stream);
+    let stream_for_write = Arc::clone(&stream);
     
-    // Perform bidirectional data forwarding
-    // Task 1: Stream -> Outbound
-    tracing::debug!("[Proxy] Spawning Task1 (stream->outbound) for stream {}", stream_id_for_log);
+    // Task 1: Stream -> Outbound（从 stream 读取，写入 outbound）
+    tracing::debug!("[Proxy] Spawning Task1 (stream->outbound) for stream {}", stream_id);
     let task1 = tokio::spawn(async move {
-        tracing::debug!("[Proxy-Task1] Task spawned, starting stream->outbound forwarding for stream {}", stream_id_for_log);
-        tokio::task::yield_now().await;
+        tracing::debug!("[Proxy-Task1] Task started for stream {}", stream_id);
+        
+        // 获取 reader 的引用（无需锁整个 stream）
+        let reader_mutex = stream_for_read.reader();
         let mut buf = vec![0u8; 8192];
         let mut iteration = 0u64;
+        
         loop {
             iteration += 1;
-            tracing::trace!("[Proxy-Task1] Iteration {}: Reading from stream {}", iteration, stream_id_for_log);
             
-            // Use timeout to periodically release lock and allow Task2 to acquire it
-            let n = tokio::time::timeout(std::time::Duration::from_millis(100), async {
-                tracing::trace!("[Proxy-Task1] Acquiring stream lock to check buffer (iteration {})", iteration);
-                let mut stream_arc = stream_read.lock().await;
-                // Get mutable reference to Stream (unsafe because we hold the Mutex)
-                let stream_ptr = Arc::as_ptr(&stream_arc);
-                let stream_mut_ptr = stream_ptr as *mut Stream;
-                let stream_ref: &mut Stream = unsafe { &mut *stream_mut_ptr };
-                
-                // Try to read from buffer first (non-blocking)
-                let buffer_read = stream_ref.try_read_from_buffer(&mut buf);
-                
-                if buffer_read > 0 {
-                    drop(stream_arc); // Release lock immediately
-                    tracing::debug!("[Proxy-Task1] Read {} bytes from buffer (iteration {})", buffer_read, iteration);
-                    return Ok::<usize, ()>(buffer_read);
-                }
-                
-                // Buffer is empty, need to wait for channel data
-                // Use timeout to prevent holding lock too long
-                tracing::trace!("[Proxy-Task1] Buffer empty, waiting for channel data (iteration {})", iteration);
-                match tokio::time::timeout(std::time::Duration::from_millis(50), stream_ref.recv_from_channel()).await {
-                    Ok(Some(data)) => {
-                        let n = stream_ref.store_in_buffer(data, &mut buf);
-                        drop(stream_arc); // Release lock
-                        tracing::debug!("[Proxy-Task1] Received and stored {} bytes from channel (iteration {})", n, iteration);
-                        Ok(n)
+            // 获取 reader 的锁并读取
+            // 注意：锁只在读取时持有，不影响 Task2 的写入
+            let n = {
+                let mut reader = reader_mutex.lock().await;
+                match reader.read(&mut buf).await {
+                    Ok(0) => {
+                        tracing::debug!("[Proxy-Task1] Stream EOF (stream_id={}, iteration={})", stream_id, iteration);
+                        break;
                     }
-                    Ok(None) => {
-                        drop(stream_arc); // Release lock
-                        tracing::debug!("[Proxy-Task1] Channel closed (EOF) (iteration {})", iteration);
-                        Err(())
+                    Ok(n) => {
+                        tracing::debug!("[Proxy-Task1] Read {} bytes from stream {} (iteration={})", n, stream_id, iteration);
+                        n
                     }
-                    Err(_) => {
-                        // Timeout - release lock and retry
-                        drop(stream_arc);
-                        tracing::trace!("[Proxy-Task1] Channel wait timeout, releasing lock (iteration {})", iteration);
-                        Err(())
+                    Err(e) => {
+                        tracing::error!("[Proxy-Task1] Stream read error (stream_id={}, iteration={}): {}", stream_id, iteration, e);
+                        break;
                     }
                 }
-            }).await;
+            }; // reader 锁在这里释放
             
-            let n = match n {
-                Ok(Ok(n)) => n,
-                Ok(Err(_)) => {
-                    // EOF or error
-                    tracing::debug!("[Proxy-Task1] Stream read EOF (iteration {})", iteration);
-                    break;
-                }
-                Err(_) => {
-                    // Outer timeout - retry the loop (this allows Task2 to get lock)
-                    tracing::trace!("[Proxy-Task1] Lock acquisition timeout, retrying (iteration {})", iteration);
-                    tokio::task::yield_now().await; // Yield to allow Task2 to run
-                    continue;
-                }
-            };
-            
-            tracing::debug!("[Proxy-Task1] Writing {} bytes to outbound (iteration {})", n, iteration);
-            if outbound_write.write_all(&buf[..n]).await.is_err() {
-                tracing::error!("[Proxy-Task1] Error writing {} bytes to outbound (iteration {})", n, iteration);
+            // 写入 outbound（无锁）
+            if let Err(e) = outbound_write.write_all(&buf[..n]).await {
+                tracing::error!("[Proxy-Task1] Outbound write error: {}", e);
                 break;
             }
-            tracing::trace!("[Proxy-Task1] Forwarded {} bytes to outbound (iteration {})", n, iteration);
+            
+            tracing::trace!("[Proxy-Task1] Forwarded {} bytes to outbound (iteration={})", n, iteration);
         }
-        tracing::debug!("[Proxy-Task1] Task1 finished for stream {} after {} iterations", stream_id_for_log, iteration);
+        
+        tracing::debug!("[Proxy-Task1] Task completed for stream {} after {} iterations", stream_id, iteration);
     });
     
-    // Task 2: Outbound -> Stream
-    tracing::debug!("[Proxy] Spawning Task2 (outbound->stream) for stream {}", stream_id_for_log);
+    // Task 2: Outbound -> Stream（从 outbound 读取，写入 stream）
+    tracing::debug!("[Proxy] Spawning Task2 (outbound->stream) for stream {}", stream_id);
     let task2 = tokio::spawn(async move {
-        tracing::debug!("[Proxy-Task2] Task spawned, starting outbound->stream forwarding for stream {}", stream_id_for_log);
-        tokio::task::yield_now().await;
+        tracing::debug!("[Proxy-Task2] Task started for stream {}", stream_id);
         let mut buf = vec![0u8; 8192];
         let mut iteration = 0u64;
+        
         loop {
             iteration += 1;
-            tracing::trace!("[Proxy-Task2] Iteration {}: Reading from outbound", iteration);
+            
+            // 从 outbound 读取（无锁）
             let n = match outbound_read.read(&mut buf).await {
                 Ok(0) => {
-                    tracing::debug!("[Proxy-Task2] Outbound read EOF (iteration {})", iteration);
+                    tracing::debug!("[Proxy-Task2] Outbound EOF (stream_id={}, iteration={})", stream_id, iteration);
                     break;
                 }
                 Ok(n) => {
-                    tracing::debug!("[Proxy-Task2] Read {} bytes from outbound (iteration {})", n, iteration);
+                    tracing::debug!("[Proxy-Task2] Read {} bytes from outbound (iteration={})", n, iteration);
                     n
                 }
                 Err(e) => {
-                    tracing::error!("[Proxy-Task2] Error reading from outbound: {} (iteration {})", e, iteration);
+                    tracing::error!("[Proxy-Task2] Outbound read error: {}", e);
                     break;
                 }
             };
-            tracing::trace!("[Proxy-Task2] Acquiring stream lock for write (iteration {})", iteration);
-            let lock_result = tokio::time::timeout(std::time::Duration::from_secs(5), stream_write.lock()).await;
-            let stream_arc = match lock_result {
-                Ok(guard) => {
-                    tracing::trace!("[Proxy-Task2] Stream lock acquired (iteration {})", iteration);
-                    guard
-                }
-                Err(_) => {
-                    tracing::error!("[Proxy-Task2] Timeout waiting for stream lock (iteration {})", iteration);
-                    break;
-                }
-            };
-            {
-                use std::pin::Pin;
-                let stream_ptr = Arc::as_ptr(&stream_arc);
-                let stream_mut_ptr = stream_ptr as *mut Stream;
-                let stream_ref: &mut Stream = unsafe { &mut *stream_mut_ptr };
-                let mut pinned = unsafe { Pin::new_unchecked(stream_ref) };
-                tracing::trace!("[Proxy-Task2] Calling AsyncWriteExt::write_all for {} bytes (iteration {})", n, iteration);
-                let write_result = AsyncWriteExt::write_all(&mut pinned, &buf[..n]).await;
-                tracing::trace!("[Proxy-Task2] AsyncWriteExt::write_all returned: {:?} (iteration {})", write_result.as_ref().map(|_| "Ok").map_err(|e| e), iteration);
-                if write_result.is_err() {
-                    tracing::error!("[Proxy-Task2] Error writing {} bytes to stream {} (iteration {})", n, stream_id_for_log, iteration);
-                    break;
-                }
-                tracing::debug!("[Proxy-Task2] Wrote {} bytes to stream {} (iteration {})", n, stream_id_for_log, iteration);
+            
+            // 写入 stream（使用 send_data，完全无锁！）
+            use bytes::Bytes;
+            if let Err(e) = stream_for_write.send_data(Bytes::copy_from_slice(&buf[..n])) {
+                tracing::error!("[Proxy-Task2] Stream write error (stream_id={}, iteration={}): {:?}", stream_id, iteration, e);
+                break;
             }
-            drop(stream_arc);
-            // Lock is released here
-            tracing::trace!("[Proxy-Task2] Stream lock released (iteration {})", iteration);
+            
+            tracing::trace!("[Proxy-Task2] Wrote {} bytes to stream {} (iteration={})", n, stream_id, iteration);
         }
-        tracing::debug!("[Proxy-Task2] Task2 finished for stream {} after {} iterations", stream_id_for_log, iteration);
+        
+        tracing::debug!("[Proxy-Task2] Task completed for stream {} after {} iterations", stream_id, iteration);
     });
     
-    // Wait for both directions to complete
-    tracing::debug!("[Proxy] Waiting for Task1 and Task2 to complete for stream {}", stream_id_for_log);
-    let _ = task1.await;
-    tracing::debug!("[Proxy] Task1 completed for stream {}", stream_id_for_log);
-    let _ = task2.await;
-    tracing::debug!("[Proxy] Task2 completed for stream {}", stream_id_for_log);
+    // 等待两个任务完成
+    tracing::debug!("[Proxy] Waiting for tasks to complete for stream {}", stream_id);
+    let _ = tokio::join!(task1, task2);
     
-    tracing::info!("[Proxy] Connection to {}:{} closed for stream {}", destination.addr, destination.port, stream_id_for_log);
+    tracing::info!("[Proxy] Connection closed for stream {} to {}:{}", 
+        stream_id, destination.addr, destination.port);
     
     Ok(())
 }
