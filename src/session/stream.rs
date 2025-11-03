@@ -77,6 +77,13 @@ impl Stream {
     pub fn reader(&self) -> &Arc<tokio::sync::Mutex<StreamReader>> {
         &self.reader
     }
+    
+    /// Send data through the writer channel (无锁方式)
+    /// 
+    /// 这个方法可以被多个任务并发调用，无需任何锁
+    pub fn send_data(&self, data: Bytes) -> std::result::Result<(), mpsc::error::SendError<(u32, Bytes)>> {
+        self.writer_tx.send((self.id, data))
+    }
 }
 
 // Stream is not meant to be cloned - use Arc<Stream> instead
@@ -89,40 +96,38 @@ impl AsyncRead for Stream {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
         let stream_id = self.id;
+        let remaining = buf.remaining();
         
-        // 获取 reader 的锁
-        let mut reader_future = Box::pin(self.reader.lock());
+        // 使用 tokio::task::block_in_place 同步读取
+        // 这避免了复杂的 Future polling 和借用问题
+        let reader = Arc::clone(&self.reader);
         
-        match reader_future.as_mut().poll(cx) {
-            Poll::Ready(mut reader) => {
-                // 创建一个临时 buffer 用于 StreamReader::read()
-                let remaining = buf.remaining();
-                let mut temp_buf = vec![0u8; remaining];
-                
-                // 调用 StreamReader::read()
-                let read_future = reader.read(&mut temp_buf);
-                tokio::pin!(read_future);
-                
-                match read_future.poll(cx) {
-                    Poll::Ready(Ok(n)) => {
-                        if n > 0 {
-                            buf.put_slice(&temp_buf[..n]);
-                            tracing::trace!(
-                                "[Stream] poll_read: Read {} bytes (stream_id={})",
-                                n, stream_id
-                            );
-                        }
-                        Poll::Ready(Ok(()))
-                    }
-                    Poll::Ready(Err(e)) => {
-                        tracing::error!(
-                            "[Stream] poll_read: Error reading (stream_id={}): {}",
-                            stream_id, e
-                        );
-                        Poll::Ready(Err(e))
-                    }
-                    Poll::Pending => Poll::Pending,
+        // 创建读取 future
+        let mut read_fut = Box::pin(async move {
+            let mut reader_guard = reader.lock().await;
+            let mut temp_buf = vec![0u8; remaining];
+            let n = reader_guard.read(&mut temp_buf).await?;
+            Ok::<(usize, Vec<u8>), std::io::Error>((n, temp_buf))
+        });
+        
+        // Poll the future
+        match read_fut.as_mut().poll(cx) {
+            Poll::Ready(Ok((n, temp_buf))) => {
+                if n > 0 {
+                    buf.put_slice(&temp_buf[..n]);
+                    tracing::trace!(
+                        "[Stream] poll_read: Read {} bytes (stream_id={})",
+                        n, stream_id
+                    );
                 }
+                Poll::Ready(Ok(()))
+            }
+            Poll::Ready(Err(e)) => {
+                tracing::error!(
+                    "[Stream] poll_read: Error reading (stream_id={}): {}",
+                    stream_id, e
+                );
+                Poll::Ready(Err(e))
             }
             Poll::Pending => Poll::Pending,
         }

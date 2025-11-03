@@ -290,9 +290,10 @@ async fn proxy_tcp_connection_data_forwarding(
                 }
             };
             
-            // 写入 stream（使用 AsyncWrite trait，内部使用 writer_tx，完全无锁！）
-            if let Err(e) = stream_for_write.as_ref().write_all(&buf[..n]).await {
-                tracing::error!("[Proxy-Task2] Stream write error (stream_id={}, iteration={}): {}", stream_id, iteration, e);
+            // 写入 stream（使用 send_data，完全无锁！）
+            use bytes::Bytes;
+            if let Err(e) = stream_for_write.send_data(Bytes::copy_from_slice(&buf[..n])) {
+                tracing::error!("[Proxy-Task2] Stream write error (stream_id={}, iteration={}): {:?}", stream_id, iteration, e);
                 break;
             }
             
