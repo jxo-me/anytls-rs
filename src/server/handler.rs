@@ -218,8 +218,6 @@ async fn proxy_tcp_connection_data_forwarding(
     // Task 1: Stream -> Outbound（从 stream 读取，写入 outbound）
     tracing::debug!("[Proxy] Spawning Task1 (stream->outbound) for stream {}", stream_id);
     let task1 = tokio::spawn(async move {
-        use tokio::io::AsyncReadExt;
-        
         tracing::debug!("[Proxy-Task1] Task started for stream {}", stream_id);
         
         // 获取 reader 的引用（无需锁整个 stream）
@@ -265,8 +263,6 @@ async fn proxy_tcp_connection_data_forwarding(
     // Task 2: Outbound -> Stream（从 outbound 读取，写入 stream）
     tracing::debug!("[Proxy] Spawning Task2 (outbound->stream) for stream {}", stream_id);
     let task2 = tokio::spawn(async move {
-        use tokio::io::AsyncWriteExt;
-        
         tracing::debug!("[Proxy-Task2] Task started for stream {}", stream_id);
         let mut buf = vec![0u8; 8192];
         let mut iteration = 0u64;

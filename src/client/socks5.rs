@@ -18,8 +18,11 @@ const AUTH_NO_AUTHENTICATION: u8 = 0x00;
 const AUTH_NOT_ACCEPTABLE: u8 = 0xFF;
 
 /// SOCKS5 command types
+#[allow(dead_code)]
 const CMD_CONNECT: u8 = 0x01;
+#[allow(dead_code)]
 const CMD_BIND: u8 = 0x02;
+#[allow(dead_code)]
 const CMD_UDP_ASSOCIATE: u8 = 0x03;
 
 /// SOCKS5 address types
@@ -30,10 +33,15 @@ const ATYP_IPV6: u8 = 0x04;
 /// SOCKS5 reply codes
 const REPLY_SUCCEEDED: u8 = 0x00;
 const REPLY_GENERAL_FAILURE: u8 = 0x01;
+#[allow(dead_code)]
 const REPLY_CONNECTION_NOT_ALLOWED: u8 = 0x02;
+#[allow(dead_code)]
 const REPLY_NETWORK_UNREACHABLE: u8 = 0x03;
+#[allow(dead_code)]
 const REPLY_HOST_UNREACHABLE: u8 = 0x04;
+#[allow(dead_code)]
 const REPLY_CONNECTION_REFUSED: u8 = 0x05;
+#[allow(dead_code)]
 const REPLY_TTL_EXPIRED: u8 = 0x06;
 #[allow(dead_code)]
 const REPLY_COMMAND_NOT_SUPPORTED: u8 = 0x07;

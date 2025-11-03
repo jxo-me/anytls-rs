@@ -190,7 +190,7 @@ mod tests {
     #[tokio::test]
     async fn test_stream_write() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let (reader_tx, reader_rx) = mpsc::unbounded_channel();
+        let (_reader_tx, reader_rx) = mpsc::unbounded_channel();
         
         let reader = StreamReader::new(1, reader_rx);
         let mut stream = Stream::new(1, reader, tx);
