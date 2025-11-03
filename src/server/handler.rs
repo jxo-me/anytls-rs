@@ -34,9 +34,31 @@ impl StreamHandler for TcpProxyHandler {
             let peer_version = session.peer_version();
             tracing::debug!("[Proxy] Handling stream {} (peer_version={})", stream_id, peer_version);
             
-            // Proxy the connection (reads SOCKS5 address and establishes outbound TCP connection)
-            // Similar to Go's proxyOutboundTCP - send SYNACK after TCP connection is established
-            proxy_tcp_connection_with_synack(stream, session, stream_id, peer_version).await
+            // Read SOCKS5 address to determine the destination
+            let destination = match read_socks_addr(stream.clone()).await {
+                Ok(addr) => addr,
+                Err(e) => {
+                    tracing::error!("[Proxy] Failed to read SOCKS5 address: {}", e);
+                    return Err(e);
+                }
+            };
+            
+            tracing::info!("[Proxy] Destination: {}:{}", destination.addr, destination.port);
+            
+            // Check if this is a UDP over TCP request
+            if destination.addr.contains("udp-over-tcp.arpa") {
+                tracing::info!("[Proxy] Detected UDP over TCP request");
+                crate::server::udp_proxy::handle_udp_over_tcp(stream).await
+            } else {
+                // Regular TCP proxy
+                proxy_tcp_connection_with_synack_internal(
+                    stream,
+                    session,
+                    stream_id,
+                    peer_version,
+                    destination
+                ).await
+            }
         })
     }
 }
@@ -138,18 +160,15 @@ async fn read_socks_addr(stream: Arc<Stream>) -> Result<SocksAddr> {
     Ok(SocksAddr { addr, port })
 }
 
-/// Proxy TCP connection with SYNACK support: read destination from stream, establish connection, send SYNACK, and forward data
-async fn proxy_tcp_connection_with_synack(
+/// Proxy TCP connection with SYNACK support (internal version with destination already provided)
+async fn proxy_tcp_connection_with_synack_internal(
     stream: Arc<Stream>,
     session: Arc<Session>,
     stream_id: u32,
     peer_version: u8,
+    destination: SocksAddr,
 ) -> Result<()> {
     tracing::info!("[Proxy] 🚀 proxy_tcp_connection_with_synack: Starting for stream {} (peer_version={})", stream_id, peer_version);
-    
-    // Read destination address from stream (SOCKS5 format)
-    let destination = read_socks_addr(Arc::clone(&stream)).await?;
-    
     tracing::info!("[Proxy] 🔗 Connecting to {}:{}", destination.addr, destination.port);
     
     // Resolve destination address
