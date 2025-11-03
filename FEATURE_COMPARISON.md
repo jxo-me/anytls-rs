@@ -50,9 +50,11 @@
 | Command | Go | Rust | 状态 | 优先级 |
 |---------|----|----|------|--------|
 | `cmdSYNACK` (7) | ✅ | ✅ | ✅ **完整** | 服务器确认 Stream 打开 |
-| `cmdHeartRequest` (8) | ✅ | ❌ | ❌ **缺失** | ⭐⭐⭐⭐⭐ **高** |
-| `cmdHeartResponse` (9) | ✅ | ❌ | ❌ **缺失** | ⭐⭐⭐⭐⭐ **高** |
+| `cmdHeartRequest` (8) | ⚠️ | ⚠️ | ⚠️ **都未完整** | ⭐⭐⭐⭐⭐ **高** |
+| `cmdHeartResponse` (9) | ⚠️ | ⚠️ | ⚠️ **都未完整** | ⭐⭐⭐⭐⭐ **高** |
 | `cmdServerSettings` (10) | ✅ | ✅ | ✅ **完整** | 服务器设置 |
+
+**注**: Go 实现可以响应心跳请求，但主动心跳检测逻辑未实现（注释："Active keepalive checking is not implemented yet"）
 
 ---
 
@@ -62,7 +64,9 @@
 |------|----|----|------|------|
 | **SHA256 密码哈希** | ✅ | ✅ | ✅ **完整** | 32 字节 |
 | **Padding0 支持** | ✅ | ✅ | ✅ **完整** | 认证包 padding |
-| **Fallback 机制** | ✅ | ❌ | ❌ **缺失** | 认证失败后 fallback 到 HTTP |
+| **Fallback 机制** | ⚠️ | ❌ | ⚠️ **都未实现** | 认证失败后 fallback 到 HTTP |
+
+**注**: Go 实现有 `fallback()` 函数，但标记为"暂未实现"（空函数）
 
 **详细说明**:
 
@@ -78,10 +82,13 @@
 ```go
 // 认证失败后可以 fallback 到合法的 HTTP 服务
 // 用于对抗主动探测
-if !authenticated {
-    fallbackToHTTP(conn)
+func fallback(ctx context.Context, c net.Conn) {
+    // 暂未实现
+    logrus.Debugln("fallback:", c.RemoteAddr())
 }
 ```
+
+**注**: Go 实现中 fallback 函数存在但未实现具体逻辑（仅记录日志）
 
 ---
 
@@ -188,10 +195,13 @@ stop=8
 
 | 功能 | Go | Rust | 状态 | 影响 |
 |------|----|----|------|------|
-| **心跳请求** | ✅ | ❌ | ❌ **缺失** | 无法检测卡住的连接 |
-| **心跳响应** | ✅ | ❌ | ❌ **缺失** | 无法检测卡住的连接 |
-| **连接超时检测** | ✅ | ⚠️ | ⚠️ **依赖系统** | 极端情况超时很长 |
-| **自动恢复** | ✅ | ❌ | ❌ **缺失** | 无法主动恢复 |
+| **心跳请求** | ⚠️ | ❌ | ⚠️ **都未完整** | 无法检测卡住的连接 |
+| **心跳响应** | ⚠️ | ❌ | ⚠️ **都未完整** | 无法检测卡住的连接 |
+| **被动响应心跳** | ✅ | ❌ | ⚠️ **Go已实现** | Go 可响应，Rust 未处理 |
+| **主动心跳检测** | ❌ | ❌ | ❌ **都未实现** | 两端都缺失（Go 有注释） |
+| **连接超时检测** | ⚠️ | ⚠️ | ⚠️ **依赖系统** | 极端情况超时很长 |
+
+**重要发现**: Go 实现有注释 `"Active keepalive checking is not implemented yet"`
 
 **问题说明** (来自协议文档 v2):
 
@@ -890,18 +900,83 @@ arch=x86_64|aarch64
 
 ---
 
+## 重要发现：Go 实现的实际状态
+
+### 🔍 代码审查发现
+
+通过对比 Go 参考实现的代码，发现以下事实：
+
+#### 1. 心跳机制（Go 也未完全实现）
+
+**Go 代码**:
+```go
+case cmdHeartRequest:
+    if _, err := s.writeControlFrame(newFrame(cmdHeartResponse, sid)); err != nil {
+        return err
+    }
+case cmdHeartResponse:
+    // Active keepalive checking is not implemented yet
+    break
+```
+
+**状态**:
+- ✅ Go 可以**被动响应**心跳请求
+- ❌ Go **没有实现**主动心跳检测
+- ❌ 两端都缺少主动心跳机制
+
+**影响**: 
+- Go 实现也无法主动检测卡住的连接
+- 协议文档描述的"检测并恢复卡住的连接"功能两端都未实现
+
+#### 2. Fallback 机制（Go 仅有框架）
+
+**Go 代码**:
+```go
+func fallback(ctx context.Context, c net.Conn) {
+    // 暂未实现
+    logrus.Debugln("fallback:", c.RemoteAddr())
+}
+```
+
+**状态**:
+- ⚠️ Go 有 fallback 函数框架
+- ❌ 实际逻辑未实现（空函数，仅记录日志）
+- ❌ 两端都缺少实际的 fallback 功能
+
+**影响**:
+- Go 实现也无法对抗主动探测
+- 协议文档描述的 fallback 功能是设计目标，非当前实现
+
+#### 3. UDP over TCP
+
+**Go 代码**:
+```go
+if strings.Contains(destination.String(), "udp-over-tcp.arpa") {
+    proxyOutboundUoT(ctx, stream, destination)
+} else {
+    proxyOutboundTCP(ctx, stream, destination)
+}
+```
+
+**状态**:
+- ✅ Go 实现了 UDP over TCP
+- ❌ Rust 未实现
+
+---
+
 ## 总结
 
-### 当前状态
+### 当前状态（更新后）
 
-| 方面 | 完成度 | 说明 |
-|------|--------|------|
-| **基础协议** | 95% | Frame、Command、认证、Padding ✅ |
-| **协议 v2** | 60% | SYNACK ✅, 心跳 ❌, 版本协商 ❌ |
-| **会话管理** | 85% | Session ✅, Stream ✅, 复用 ⚠️ |
-| **代理功能** | 80% | TCP ✅, SOCKS5 ✅, UDP ❌ |
-| **高级特性** | 40% | 心跳 ❌, Fallback ❌, URI ❌ |
-| **总体完成度** | **75%** | 核心功能完整，高级特性缺失 |
+| 方面 | Rust | Go | 说明 |
+|------|------|----|----|
+| **基础协议** | 95% | 100% | Frame、Command、认证、Padding |
+| **协议 v2 核心** | 70% | 75% | SYNACK ✅, ServerSettings ✅ |
+| **协议 v2 扩展** | 0% | 25% | 心跳机制两端都未完全实现 |
+| **会话管理** | 85% | 95% | Rust 复用逻辑简化 |
+| **代理功能** | 80% | 95% | Rust 缺 UDP over TCP |
+| **高级特性** | 0% | 5% | Fallback 两端都未实现 |
+| **总体完成度** | **75%** | **85%** | Rust 接近 Go 水平 |
 
 ### 关键差异
 
@@ -919,11 +994,65 @@ arch=x86_64|aarch64
 3. **UDP 支持**: 缺少 UDP over TCP
 4. **Fallback**: 无法对抗主动探测
 
-### 建议
+### 建议（基于实际发现）
 
-1. **立即实施**: 心跳机制 + SYNACK 增强 + 版本协商（v0.3.0）
-2. **中期实施**: UDP over TCP + Fallback（v0.4.0）
-3. **长期优化**: 持续性能优化和稳定性改进
+#### 🎯 调整后的优先级
+
+| 功能 | Rust状态 | Go状态 | 优先级 | 理由 |
+|------|---------|--------|--------|------|
+| **被动心跳响应** | ❌ | ✅ | ⭐⭐⭐⭐⭐ | Go 已实现，Rust 应跟进 |
+| **UDP over TCP** | ❌ | ✅ | ⭐⭐⭐⭐☆ | Go 已实现，功能性差距 |
+| **会话池增强** | ⚠️ | ✅ | ⭐⭐⭐☆☆ | Go 实现更完善 |
+| **版本协商增强** | ⚠️ | ⚠️ | ⭐⭐⭐☆☆ | 两端都需改进 |
+| **主动心跳检测** | ❌ | ❌ | ⭐⭐☆☆☆ | 两端都未实现，非紧急 |
+| **Fallback HTTP** | ❌ | ❌ | ⭐☆☆☆☆ | 两端都未实现，优先级低 |
+
+#### 🚀 实施路线图
+
+**v0.3.0 (2-3 周) - 追赶 Go 实现**:
+1. ✅ **被动心跳响应** (1-2 天) - 实现 HeartRequest → HeartResponse
+2. ✅ **UDP over TCP** (3-4 天) - 实现 sing-box 协议
+3. ✅ **会话池增强** (2-3 天) - Seq 跟踪、配置参数
+4. ✅ **SYNACK 超时** (1-2 天) - 增强错误处理
+
+**v0.4.0 (2-3 周) - 超越 Go 实现**:
+1. ✅ **主动心跳检测** (3-4 天) - 实现完整的 keepalive
+2. ✅ **Fallback HTTP** (2-3 天) - 实现实际的 fallback 逻辑
+3. ✅ **URI 格式** (1 天) - 简化配置
+4. ✅ **性能优化** - 利用 Rust 的零成本抽象
+
+---
+
+## 🎊 结论
+
+### 关键发现
+
+1. **Rust 实现已接近 Go 水平** (75% vs 85%)
+2. **主要差距在高级特性**，核心功能基本完整
+3. **Go 实现也有未完成功能** (心跳检测、Fallback)
+4. **Rust v0.2.0 重构后性能更优** (+40-60%)
+
+### 优势对比
+
+#### Rust 优势 ✅
+
+- **性能**: 40-60% 提升（Stream 重构后）
+- **内存安全**: Rust 所有权系统
+- **并发**: 无锁架构，零竞争
+- **类型安全**: 编译期保证
+
+#### Go 优势 ✅
+
+- **UDP over TCP**: 已实现
+- **被动心跳**: 已实现响应逻辑
+- **会话池**: 实现更完善
+- **代码成熟度**: 更多实际使用经验
+
+### 下一步
+
+1. **v0.3.0**: 实现被动心跳 + UDP over TCP（追上 Go）
+2. **v0.4.0**: 主动心跳检测 + Fallback（超越 Go）
+3. **v1.0.0**: 生产级稳定版本
 
 ---
 
@@ -933,7 +1062,9 @@ arch=x86_64|aarch64
 ---
 
 *参考文档*:
-- `anytls-go/docs/protocol.md`
-- `anytls-go/docs/uri_scheme.md`
-- `anytls-go/docs/faq.md`
+- `anytls-go/docs/protocol.md` - 协议规范
+- `anytls-go/docs/uri_scheme.md` - URI 格式
+- `anytls-go/docs/faq.md` - 常见问题
+- `anytls-go/proxy/session/session.go` - Go 实现源码
+- `anytls-go/cmd/server/inbound_tcp.go` - Go 服务器源码
 
