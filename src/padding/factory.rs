@@ -48,6 +48,10 @@ impl PaddingFactory {
     }
 
     /// Get the default padding factory
+    /// 
+    /// Note: This is not the `Default` trait implementation to avoid confusion
+    /// with creating a new factory. This returns a shared singleton instance.
+    #[allow(clippy::should_implement_trait)]
     pub fn default() -> Arc<Self> {
         DEFAULT_FACTORY
             .get_or_init(|| {

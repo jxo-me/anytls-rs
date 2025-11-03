@@ -1,3 +1,4 @@
+#[allow(clippy::module_inception)]
 pub mod session;
 pub mod stream;
 pub mod stream_reader;

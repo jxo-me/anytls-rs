@@ -198,7 +198,7 @@ async fn stream_to_udp(
         let mut reader_guard = reader.lock().await;
         
         // Read one UDP packet (Length + Data format)
-        let payload = match read_udp_packet(&mut *reader_guard).await {
+        let payload = match read_udp_packet(&mut reader_guard).await {
             Ok(data) => data,
             Err(e) => {
                 if e.to_string().contains("UnexpectedEof") || e.to_string().contains("EOF") {

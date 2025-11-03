@@ -89,9 +89,9 @@ impl From<HashMap<String, String>> for StringMap {
     }
 }
 
-impl Into<HashMap<String, String>> for StringMap {
-    fn into(self) -> HashMap<String, String> {
-        self.0
+impl From<StringMap> for HashMap<String, String> {
+    fn from(val: StringMap) -> Self {
+        val.0
     }
 }
 

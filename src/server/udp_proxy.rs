@@ -38,7 +38,7 @@ const MAX_UDP_PACKET_SIZE: usize = 65535;
 /// 2. Then, each packet: Length (2 bytes BE) + Payload
 /// 3. Bidirectional forwarding between Stream and UDP socket
 /// 
-/// Reference: https://github.com/SagerNet/sing-box/blob/dev-next/docs/configuration/shared/udp-over-tcp.md
+/// Reference: <https://github.com/SagerNet/sing-box/blob/dev-next/docs/configuration/shared/udp-over-tcp.md>
 pub async fn handle_udp_over_tcp(
     stream: Arc<Stream>,
 ) -> Result<()> {
@@ -51,7 +51,7 @@ pub async fn handle_udp_over_tcp(
     
     // Step 1: Read initial request (contains target address)
     // Format: SOCKS5 address (ATYP + Address + Port)
-    let target_addr = match read_initial_request(&mut *reader_guard).await {
+    let target_addr = match read_initial_request(&mut reader_guard).await {
         Ok(addr) => addr,
         Err(e) => {
             tracing::error!("[UDP] Failed to read initial request: {}", e);
@@ -196,8 +196,7 @@ async fn read_initial_request(reader: &mut StreamReader) -> Result<SocketAddr> {
             // Note: In a production environment, we might want to cache DNS results
             let addr = tokio::net::lookup_host((domain.as_str(), port))
                 .await
-                .map_err(|e| AnyTlsError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                .map_err(|e| AnyTlsError::Io(std::io::Error::other(
                     format!("DNS resolution failed for {}: {}", domain, e)
                 )))?
                 .next()
@@ -230,7 +229,7 @@ async fn stream_to_udp(
     
     loop {
         // Read one UDP packet (Length + Payload format)
-        let payload = match read_udp_packet(&mut *reader_guard).await {
+        let payload = match read_udp_packet(&mut reader_guard).await {
             Ok(data) => data,
             Err(e) => {
                 if e.to_string().contains("UnexpectedEof") || e.to_string().contains("EOF") {

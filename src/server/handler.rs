@@ -20,6 +20,12 @@ pub struct TcpProxyHandler {
     // Destination will be read from stream
 }
 
+impl Default for TcpProxyHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TcpProxyHandler {
     /// Create a new TCP proxy handler
     pub fn new() -> Self {

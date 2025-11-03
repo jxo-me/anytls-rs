@@ -12,6 +12,9 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, RwLock};
 use tokio_util::codec::Decoder;
 
+/// Type alias for new stream callback channel
+type NewStreamCallback = Arc<tokio::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<Arc<Stream>>>>>;
+
 /// Session manages multiple streams over a single TLS connection
 pub struct Session {
     // Connection reader and writer (split TLS stream)
@@ -52,7 +55,7 @@ pub struct Session {
     buffer: Arc<tokio::sync::Mutex<Vec<u8>>>,
     
     // Server callback for new streams (optional)
-    on_new_stream: Option<Arc<tokio::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<Arc<Stream>>>>>>,
+    on_new_stream: Option<NewStreamCallback>,
 }
 
 impl Session {
@@ -331,8 +334,8 @@ impl Session {
             }
             Command::Settings => {
                 // Client settings (server side)
-                if !self.is_client {
-                    if !frame.data.is_empty() {
+                if !self.is_client
+                    && !frame.data.is_empty() {
                         let settings = StringMap::from_bytes(&frame.data);
                         
                         // Check padding-md5
@@ -371,12 +374,11 @@ impl Session {
                             }
                         }
                     }
-                }
             }
             Command::ServerSettings => {
                 // Server settings (client side)
-                if self.is_client {
-                    if !frame.data.is_empty() {
+                if self.is_client
+                    && !frame.data.is_empty() {
                         let settings = StringMap::from_bytes(&frame.data);
                         if let Some(v_str) = settings.get("v") {
                             if let Ok(v) = v_str.parse::<u8>() {
@@ -385,12 +387,11 @@ impl Session {
                             }
                         }
                     }
-                }
             }
             Command::UpdatePaddingScheme => {
                 // Server updates padding scheme (client side)
-                if self.is_client {
-                    if !frame.data.is_empty() {
+                if self.is_client
+                    && !frame.data.is_empty() {
                         let raw_scheme = frame.data.as_ref();
                         match PaddingFactory::update_default(raw_scheme) {
                             Ok(_) => {
@@ -406,7 +407,6 @@ impl Session {
                             }
                         }
                     }
-                }
             }
             Command::Alert => {
                 // Alert message - fatal error, should close session

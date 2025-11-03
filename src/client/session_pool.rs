@@ -53,6 +53,12 @@ pub struct SessionPool {
     cleanup_task: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
+impl Default for SessionPool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SessionPool {
     /// Create a new session pool with default configuration
     pub fn new() -> Self {
