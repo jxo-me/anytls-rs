@@ -1,0 +1,166 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v0.3.0)'
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build Release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            artifact_name: anytls-linux
+          - os: macos-latest
+            artifact_name: anytls-macos
+          - os: windows-latest
+            artifact_name: anytls-windows
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-
+      
+      - name: Build release binaries
+        run: |
+          cargo build --release --verbose --bin anytls-client --bin anytls-server
+      
+      - name: Create release archive
+        shell: bash
+        run: |
+          mkdir -p release
+          VERSION=${GITHUB_REF#refs/tags/v}
+          ARTIFACT_NAME="${{ matrix.artifact_name }}-${VERSION}"
+          if [ "${{ matrix.os }}" == "windows-latest" ]; then
+            cp target/release/anytls-client.exe release/anytls-client.exe
+            cp target/release/anytls-server.exe release/anytls-server.exe
+            cd release
+            powershell Compress-Archive -Path * -DestinationPath ../${ARTIFACT_NAME}.zip
+            cd ..
+          else
+            cp target/release/anytls-client release/anytls-client
+            cp target/release/anytls-server release/anytls-server
+            tar czf ${ARTIFACT_NAME}.tar.gz -C release .
+          fi
+          echo "ARTIFACT_PATH=${ARTIFACT_NAME}.*" >> $GITHUB_ENV
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            ${{ env.ARTIFACT_PATH }}
+          if-no-files-found: warn
+
+  publish:
+    name: Publish to crates.io
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ubuntu-cargo-publish-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Verify package
+        run: |
+          cargo package --verify
+          cargo package --list
+      
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
+            echo "Error: CARGO_REGISTRY_TOKEN secret is not set"
+            echo "Please set it in GitHub Secrets: Settings -> Secrets and variables -> Actions"
+            exit 1
+          fi
+          cargo publish --verbose
+
+  create-release:
+    name: Create GitHub Release
+    needs: [build, publish]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Get version from tag
+        id: get_version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+      
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      
+      - name: Generate changelog
+        id: changelog
+        run: |
+          if [ -f docs/CHANGELOG.md ]; then
+            VERSION=${{ steps.get_version.outputs.version }}
+            # Extract changelog for this version
+            awk "/^## \[$VERSION\]/,/^## \[/" docs/CHANGELOG.md | sed '$d' > RELEASE_NOTES.md || echo "## [$VERSION] Release" > RELEASE_NOTES.md
+            if [ -s RELEASE_NOTES.md ]; then
+              echo "has_notes=true" >> $GITHUB_OUTPUT
+            else
+              echo "has_notes=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "has_notes=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/**/*
+          body_path: RELEASE_NOTES.md
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

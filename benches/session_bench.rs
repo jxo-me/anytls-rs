@@ -71,7 +71,7 @@ async fn create_test_session_async(is_client: bool) -> Session {
         Session::new_client(
             Box::new(reader) as Box<dyn AsyncRead + Send + Unpin>,
             Box::new(writer) as Box<dyn AsyncWrite + Send + Unpin>,
-            padding,
+            padding.clone(),
         )
     } else {
         Session::new_server(
@@ -83,21 +83,26 @@ async fn create_test_session_async(is_client: bool) -> Session {
 }
 
 fn bench_frame_encoding(c: &mut Criterion) {
+    use anytls_rs::protocol::FrameCodec;
+    use bytes::BytesMut;
+    use tokio_util::codec::Encoder;
+    
     let mut group = c.benchmark_group("frame_encoding");
     
     for size in [64, 256, 1024, 4096, 16384].iter() {
         let data = vec![0u8; *size];
         let frame = Frame::with_data(Command::Push, 1, Bytes::from(data));
+        let mut codec = FrameCodec;
         
         group.bench_with_input(
             BenchmarkId::new("encode", size),
             &frame,
             |b, frame| {
+                let mut buffer = BytesMut::new();
                 b.iter(|| {
-                    // Simulate encoding by accessing frame fields
-                    black_box(frame.cmd);
-                    black_box(frame.stream_id);
-                    black_box(frame.data.len());
+                    buffer.clear();
+                    codec.encode(frame.clone(), &mut buffer).unwrap();
+                    black_box(&buffer);
                 })
             },
         );
@@ -128,9 +133,55 @@ fn bench_session_startup(c: &mut Criterion) {
     });
 }
 
-fn bench_padding_factory(c: &mut Criterion) {
-    let factory = PaddingFactory::default();
+fn bench_session_startup_complete(c: &mut Criterion) {
+    c.bench_function("session_startup_complete", |b| {
+        b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| async {
+            let session = create_test_session_async(true).await;
+            let session = Arc::new(session);
+            // Start client session (sends Settings frame and starts background tasks)
+            let _ = session.clone().start_client().await;
+            black_box(session)
+        })
+    });
+}
+
+fn bench_frame_decode(c: &mut Criterion) {
+    use anytls_rs::protocol::FrameCodec;
+    use bytes::BytesMut;
+    use tokio_util::codec::{Decoder, Encoder};
     
+    let mut group = c.benchmark_group("frame_decode");
+    let mut codec = FrameCodec;
+    
+    for size in [64, 256, 1024, 4096, 16384].iter() {
+        // Pre-encode frames for decoding benchmark
+        let frame = Frame::with_data(Command::Push, 1, Bytes::from(vec![0u8; *size]));
+        let mut encoded = BytesMut::new();
+        codec.encode(frame, &mut encoded).unwrap();
+        
+        group.bench_with_input(
+            BenchmarkId::new("decode", size),
+            &encoded,
+            |b, encoded| {
+                let mut buffer = encoded.clone();
+                b.iter(|| {
+                    let mut decode_codec = FrameCodec;
+                    let result = decode_codec.decode(&mut buffer);
+                    if result.is_ok() && result.as_ref().unwrap().is_some() {
+                        black_box(result.unwrap().unwrap());
+                    }
+                    // Reset buffer for next iteration
+                    buffer = encoded.clone();
+                })
+            },
+        );
+    }
+    
+    group.finish();
+}
+
+fn bench_padding_factory(c: &mut Criterion) {
+    // 测试 default() 调用开销（真实场景：通常在初始化时调用一次）
     c.bench_function("padding_factory_default", |b| {
         b.iter(|| {
             let _f = PaddingFactory::default();
@@ -138,6 +189,18 @@ fn bench_padding_factory(c: &mut Criterion) {
         })
     });
     
+    // 测试实际使用场景：获取 factory 并使用（更真实）
+    let factory = PaddingFactory::default();
+    c.bench_function("padding_factory_get_and_use", |b| {
+        b.iter(|| {
+            // 模拟实际使用：获取并调用方法
+            let f = PaddingFactory::default();
+            let sizes = f.generate_record_payload_sizes(0);
+            black_box(sizes);
+        })
+    });
+    
+    // 测试 generate_sizes 性能（重用 factory，避免 default() 开销）
     c.bench_function("padding_factory_generate_sizes", |b| {
         b.iter(|| {
             for i in 0..10 {
@@ -169,11 +232,118 @@ fn bench_password_hashing(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_session_write_frame(c: &mut Criterion) {
+    let mut group = c.benchmark_group("session_write_frame");
+    
+    for size in [64, 256, 1024, 4096].iter() {
+        group.bench_with_input(
+            BenchmarkId::new("write_frame", size),
+            size,
+            |b, &size| {
+                b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| async {
+                    let session = create_test_session_async(true).await;
+                    let session = Arc::new(session);
+                    let frame = Frame::with_data(Command::Push, 1, Bytes::from(vec![0u8; size]));
+                    let _ = session.write_frame(frame).await;
+                    black_box(&session);
+                })
+            },
+        );
+    }
+    
+    group.finish();
+}
+
+fn bench_session_write_data_frame(c: &mut Criterion) {
+    let mut group = c.benchmark_group("session_write_data_frame");
+    
+    for size in [64, 256, 1024, 4096, 16384].iter() {
+        group.bench_with_input(
+            BenchmarkId::new("write_data_frame", size),
+            size,
+            |b, &size| {
+                b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| async {
+                    let session = create_test_session_async(true).await;
+                    let session = Arc::new(session);
+                    let data = Bytes::from(vec![0u8; size]);
+                    let _ = session.write_data_frame(1, data).await;
+                    black_box(&session);
+                })
+            },
+        );
+    }
+    
+    group.finish();
+}
+
+fn bench_session_control_frames(c: &mut Criterion) {
+    let mut group = c.benchmark_group("session_control_frames");
+    
+    // Test different control frame types
+    let frame_types = vec![
+        (Command::Syn, "syn"),
+        (Command::Fin, "fin"),
+        (Command::HeartRequest, "heart_request"),
+        (Command::HeartResponse, "heart_response"),
+    ];
+    
+    for (cmd, name) in frame_types.iter() {
+        group.bench_with_input(
+            BenchmarkId::from_parameter(name),
+            cmd,
+            |b, &cmd| {
+                b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| async {
+                    let session = create_test_session_async(true).await;
+                    let session = Arc::new(session);
+                    let frame = Frame::control(cmd, 1);
+                    let _ = session.write_control_frame(frame).await;
+                    black_box(&session);
+                })
+            },
+        );
+    }
+    
+    group.finish();
+}
+
+fn bench_session_multiple_streams(c: &mut Criterion) {
+    let mut group = c.benchmark_group("session_multiple_streams");
+    
+    for stream_count in [1, 5, 10, 20, 50].iter() {
+        group.bench_with_input(
+            BenchmarkId::new("open_streams", stream_count),
+            stream_count,
+            |b, &count| {
+                b.to_async(tokio::runtime::Runtime::new().unwrap()).iter(|| async {
+                    let session = create_test_session_async(true).await;
+                    let session = Arc::new(session);
+                    
+                    let mut streams = Vec::new();
+                    for _ in 0..count {
+                        if let Ok((stream, _)) = session.open_stream().await {
+                            streams.push(stream);
+                        }
+                    }
+                    black_box(streams);
+                })
+            },
+        );
+    }
+    
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_frame_encoding,
+    bench_frame_decode,
     bench_stream_creation,
     bench_session_startup,
+    bench_session_startup_complete,
+    bench_session_write_frame,
+    bench_session_write_data_frame,
+    bench_session_control_frames,
+    bench_session_multiple_streams,
     bench_padding_factory,
     bench_password_hashing
 );

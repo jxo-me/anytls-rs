@@ -1,0 +1,97 @@
+name: Publish to crates.io
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g., 0.3.0)'
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ubuntu-cargo-publish-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ubuntu-cargo-publish-
+      
+      - name: Check formatting
+        run: cargo fmt --check
+      
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      
+      - name: Build
+        run: cargo build --release --verbose
+      
+      - name: Run tests
+        run: cargo test --verbose --all-features
+      
+      - name: Verify package metadata
+        run: |
+          cargo package --list
+          cargo package --verify
+      
+      - name: Check version match
+        if: github.event_name == 'release'
+        run: |
+          VERSION=$(grep '^version =' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          if [ "$VERSION" != "$TAG_VERSION" ]; then
+            echo "Error: Cargo.toml version ($VERSION) does not match tag version ($TAG_VERSION)"
+            exit 1
+          fi
+      
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
+            echo "Error: CARGO_REGISTRY_TOKEN secret is not set"
+            exit 1
+          fi
+          cargo publish --verbose
+      
+      - name: Create GitHub Release Notes
+        if: github.event_name == 'release'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const changelog = fs.readFileSync('docs/CHANGELOG.md', 'utf8');
+            // Extract version section from changelog
+            const version = process.env.GITHUB_REF.replace('refs/tags/v', '');
+            const versionRegex = new RegExp(`## \\[${version}\\][\\s\\S]*?(?=## \\[|$)`);
+            const match = changelog.match(versionRegex);
+            if (match) {
+              github.rest.repos.updateRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: context.payload.release.id,
+                body: match[0]
+              });
+            }
+
