@@ -257,11 +257,15 @@ impl Session {
                     // 创建 StreamReader
                     let reader = crate::session::StreamReader::new(stream_id, receive_rx);
                     
-                    let stream = Arc::new(Stream::new(
+                    // Server side: create stream without waiting for SYNACK
+                    // The receiver is discarded since server doesn't need it
+                    let (stream, _synack_rx) = Stream::new(
                         stream_id,
                         reader,
                         self.stream_data_tx.clone(),
-                    ));
+                    );
+                    
+                    let stream = Arc::new(stream);
                     
                     {
                         let mut receive_map = self.stream_receive_tx.write().await;
@@ -295,21 +299,24 @@ impl Session {
                 // Server acknowledges stream open (client side)
                 if self.is_client {
                     tracing::info!("[Session] ✅ Received SYNACK for stream {}", frame.stream_id);
-                    // If data is present, it's an error message
-                    if !frame.data.is_empty() {
-                        let error_msg = String::from_utf8_lossy(&frame.data);
-                        tracing::error!("[Session] Stream {} error from server: {}", frame.stream_id, error_msg);
-                        
-                        // Close the stream and notify it about the error
-                        let mut streams = self.streams.write().await;
-                        if let Some(stream) = streams.remove(&frame.stream_id) {
-                            drop(streams);
+                    
+                    let streams = self.streams.read().await;
+                    if let Some(stream) = streams.get(&frame.stream_id) {
+                        // If data is present, it's an error message
+                        if !frame.data.is_empty() {
+                            let error_msg = String::from_utf8_lossy(&frame.data).to_string();
+                            tracing::error!("[Session] Stream {} error from server: {}", frame.stream_id, error_msg);
+                            
+                            // Notify stream about the error
                             let error = AnyTlsError::Protocol(format!("Server error: {}", error_msg));
-                            stream.close_with_error(error).await;
-                            tracing::info!("[Session] Removed stream {} due to error and notified stream", frame.stream_id);
+                            stream.notify_synack(Err(error)).await;
+                        } else {
+                            tracing::info!("[Session] ✅ Stream {} SYNACK received (success) - stream is ready", frame.stream_id);
+                            // Notify stream about success
+                            stream.notify_synack(Ok(())).await;
                         }
                     } else {
-                        tracing::info!("[Session] ✅ Stream {} SYNACK received (success) - stream is ready", frame.stream_id);
+                        tracing::warn!("[Session] Received SYNACK for unknown stream {}", frame.stream_id);
                     }
                 } else {
                     tracing::warn!("[Session] Received SYNACK on server side (unexpected)");
@@ -467,7 +474,8 @@ impl Session {
     }
 
     /// Create a new stream (client side)
-    pub async fn open_stream(&self) -> Result<Arc<Stream>> {
+    /// Returns the stream and SYNACK receiver for timeout detection
+    pub async fn open_stream(&self) -> Result<(Arc<Stream>, tokio::sync::oneshot::Receiver<Result<()>>)> {
         if self.is_closed() {
             tracing::warn!("[Session] Attempted to open stream on closed session");
             return Err(AnyTlsError::SessionClosed);
@@ -482,11 +490,13 @@ impl Session {
         // 创建 StreamReader
         let reader = crate::session::StreamReader::new(stream_id, receive_rx);
         
-        let stream = Arc::new(Stream::new(
+        let (stream, synack_rx) = Stream::new(
             stream_id,
             reader,
             self.stream_data_tx.clone(),
-        ));
+        );
+        
+        let stream = Arc::new(stream);
         
         // Store the receive_tx for sending data to this stream
         {
@@ -508,7 +518,7 @@ impl Session {
         self.write_frame(frame).await?;
         tracing::debug!("[Session] SYN frame sent for stream {}", stream_id);
         
-        Ok(stream)
+        Ok((stream, synack_rx))
     }
 
     /// Disable buffering (this will flush buffer on next write)

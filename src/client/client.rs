@@ -7,6 +7,7 @@ use crate::util::{AnyTlsError, Result, hash_password, send_authentication};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use tokio::net::TcpStream;
+use tokio::time::Duration;
 use tokio_rustls::rustls::pki_types::ServerName;
 
 /// Client manages connections to AnyTLS servers
@@ -67,8 +68,8 @@ impl Client {
         tracing::debug!("[Client] Got session for proxy stream");
         
         // Open a new stream in the session
-        let stream = session.open_stream().await?;
-        tracing::debug!("[Client] Opened stream {} in session", stream.id());
+        let (stream, synack_rx) = session.open_stream().await?;
+        tracing::debug!("[Client] Opened stream {} in session, waiting for SYNACK", stream.id());
         
         // Write destination address to stream (SOCKS5 format)
         // Use session's write_data_frame to send data without needing to unwrap Arc<Stream>
@@ -121,11 +122,35 @@ impl Client {
         tracing::info!("[Client] ✅ Successfully wrote destination address to stream {}", stream_id);
         tracing::info!("[Client] ⏳ Waiting for SYNACK from server for stream {}...", stream_id);
         
-        // Note: In Go version, client waits for SYNACK, but we don't wait here
-        // The SYNACK will be processed by recv_loop when it arrives
-        // For now, we just return the stream and let data forwarding start
+        // Wait for SYNACK with timeout (30 seconds default)
+        const DEFAULT_SYNACK_TIMEOUT: Duration = Duration::from_secs(30);
         
-        Ok((stream, session))
+        match tokio::time::timeout(DEFAULT_SYNACK_TIMEOUT, synack_rx).await {
+            Ok(Ok(Ok(()))) => {
+                tracing::info!("[Client] ✅ SYNACK received for stream {} - stream ready", stream_id);
+                Ok((stream, session))
+            }
+            Ok(Ok(Err(e))) => {
+                tracing::error!("[Client] ❌ SYNACK error for stream {}: {}", stream_id, e);
+                let error_msg = e.to_string();
+                let error = AnyTlsError::Protocol(error_msg.clone());
+                stream.close_with_error(error).await;
+                Err(AnyTlsError::Protocol(error_msg))
+            }
+            Ok(Err(_)) => {
+                tracing::error!("[Client] ❌ SYNACK channel closed for stream {}", stream_id);
+                let error = AnyTlsError::Protocol("SYNACK channel closed".into());
+                stream.close_with_error(error).await;
+                Err(AnyTlsError::Protocol("SYNACK channel closed".into()))
+            }
+            Err(_) => {
+                tracing::error!("[Client] ⏰ SYNACK timeout for stream {} after {}s", stream_id, DEFAULT_SYNACK_TIMEOUT.as_secs());
+                let error_msg = format!("SYNACK timeout after {}s", DEFAULT_SYNACK_TIMEOUT.as_secs());
+                let error = AnyTlsError::Protocol(error_msg.clone());
+                stream.close_with_error(error).await;
+                Err(AnyTlsError::Protocol(error_msg))
+            }
+        }
     }
 
     /// Create a new stream by establishing or reusing a session
