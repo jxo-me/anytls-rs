@@ -122,70 +122,53 @@ async fn handle_socks5_connection(
     tracing::debug!("[SOCKS5] Session recv_loop should be running: {}", !session.is_closed());
     let (mut client_read, mut client_write) = tokio::io::split(client_conn);
     
-    // We can't unwrap Arc<Stream> because session also holds a reference
-    // Solution: Use Mutex to wrap the Arc itself, allowing safe concurrent access
-    //          For writing, use session.write_data_frame to avoid unwrapping
-    let proxy_stream_mutex = Arc::new(tokio::sync::Mutex::new(proxy_stream));
-    let proxy_stream_read = Arc::clone(&proxy_stream_mutex);
+    // ===== 新实现：不再需要 Arc<Mutex<>> 包装！=====
+    // 直接克隆 Arc<Stream> 用于两个任务
+    let proxy_stream_read = Arc::clone(&proxy_stream);
     let session_for_write: Arc<crate::session::Session> = Arc::clone(&session);
     
     tracing::debug!("[SOCKS5] Spawning Task1 and Task2 for stream {}", stream_id);
     
     let task1 = tokio::spawn(async move {
-        tracing::debug!("[SOCKS5-Task1] Task spawned, starting proxy->client forwarding for stream {}", stream_id);
+        tracing::debug!("[SOCKS5-Task1] Task started for stream {}", stream_id);
+        
+        // 获取 reader 的引用（无需锁整个 stream）
+        let reader_mutex = proxy_stream_read.reader();
         let mut buf = vec![0u8; 8192];
         let mut iteration = 0u64;
         
-        // Yield to ensure task is actually running
-        tokio::task::yield_now().await;
-        
         loop {
             iteration += 1;
-            tracing::trace!("[SOCKS5-Task1] Iteration {}: Attempting to read from proxy stream {}", iteration, stream_id);
             
+            // 获取 reader 的锁并读取
             let n = {
-                tracing::debug!("[SOCKS5-Task1] Acquiring Mutex lock for stream {} (iteration {})", stream_id, iteration);
-                let stream_arc = proxy_stream_read.lock().await;
-                tracing::debug!("[SOCKS5-Task1] ✅ Mutex lock acquired for stream {} (iteration {})", stream_id, iteration);
-                
-                // We need to get &mut from Arc, but Arc only gives us &T
-                // Use unsafe to get &mut Stream from Arc for reading
-                // This is safe because AsyncRead::poll_read doesn't move the Stream
-                use std::pin::Pin;
-                let stream_ptr = Arc::as_ptr(&stream_arc);
-                let stream_mut_ptr = stream_ptr as *mut crate::session::Stream;
-                let stream_ref: &mut crate::session::Stream = unsafe { &mut *stream_mut_ptr };
-                let mut pinned = unsafe { Pin::new_unchecked(stream_ref) };
-                
-                tracing::trace!("[SOCKS5-Task1] Calling AsyncReadExt::read for stream {} (iteration {})", stream_id, iteration);
-                let result = AsyncReadExt::read(&mut pinned, &mut buf).await;
-                tracing::trace!("[SOCKS5-Task1] AsyncReadExt::read returned for stream {}: {:?}", stream_id, result.as_ref().map(|n| *n));
-                
-                match result {
+                let mut reader = reader_mutex.lock().await;
+                match reader.read(&mut buf).await {
                     Ok(0) => {
-                        tracing::debug!("[SOCKS5-Task1] Proxy stream {} read EOF (iteration {})", stream_id, iteration);
+                        tracing::debug!("[SOCKS5-Task1] Proxy stream EOF (stream_id={}, iteration={})", stream_id, iteration);
                         break;
                     }
                     Ok(n) => {
-                        tracing::debug!("[SOCKS5-Task1] Read {} bytes from proxy stream {} (iteration {})", n, stream_id, iteration);
+                        tracing::debug!("[SOCKS5-Task1] Read {} bytes from proxy stream (iteration={})", n, iteration);
                         n
                     }
                     Err(e) => {
-                        tracing::error!("[SOCKS5-Task1] Error reading from proxy stream {}: {} (iteration {})", stream_id, e, iteration);
+                        tracing::error!("[SOCKS5-Task1] Proxy stream read error: {} (iteration={})", e, iteration);
                         break;
                     }
                 }
-            };
+            }; // reader 锁在这里释放
             
-            // Release lock before writing to client
-            tracing::trace!("[SOCKS5-Task1] Writing {} bytes to SOCKS5 client (iteration {})", n, iteration);
+            // 写入 SOCKS5 客户端（无锁）
             if client_write.write_all(&buf[..n]).await.is_err() {
-                tracing::error!("[SOCKS5-Task1] Error writing {} bytes to SOCKS5 client (iteration {})", n, iteration);
+                tracing::error!("[SOCKS5-Task1] Client write error (iteration={})", iteration);
                 break;
             }
-            tracing::debug!("[SOCKS5-Task1] Forwarded {} bytes to SOCKS5 client (iteration {})", n, iteration);
+            
+            tracing::trace!("[SOCKS5-Task1] Forwarded {} bytes to client (iteration={})", n, iteration);
         }
-        tracing::debug!("[SOCKS5-Task1] Task1 (proxy->client) finished for stream {} after {} iterations", stream_id, iteration);
+        
+        tracing::debug!("[SOCKS5-Task1] Task completed for stream {} after {} iterations", stream_id, iteration);
     });
     
     let task2 = tokio::spawn(async move {
