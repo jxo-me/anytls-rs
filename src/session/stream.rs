@@ -68,7 +68,7 @@ impl Stream {
     /// * `result` - Ok(()) for success, Err for error
     pub async fn notify_synack(&self, result: Result<()>) {
         let mut tx_guard = self.synack_tx.lock().await;
-        if let Some(tx) = tx_guard.take() {
+        match tx_guard.take() { Some(tx) => {
             let result_clone = match &result {
                 Ok(()) => Ok(()),
                 Err(e) => Err(AnyTlsError::Protocol(e.to_string())),
@@ -79,9 +79,9 @@ impl Stream {
                 self.id,
                 result.is_ok()
             );
-        } else {
+        } _ => {
             tracing::warn!("[Stream] SYNACK already notified for stream {}", self.id);
-        }
+        }}
     }
 
     /// Get stream ID

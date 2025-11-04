@@ -115,7 +115,7 @@ fn bench_session_pool_concurrent_get(c: &mut Criterion) {
                 format!("{}pool_{}gets", pool_size, concurrent_gets),
             ),
             &(pool_size, concurrent_gets),
-            |b, (&pool_size, &concurrent_gets)| {
+            |b, &(&pool_size, &concurrent_gets)| {
                 b.to_async(tokio::runtime::Runtime::new().unwrap())
                     .iter(|| async {
                         let pool = Arc::new(SessionPool::new());

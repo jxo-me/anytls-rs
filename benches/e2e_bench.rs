@@ -114,7 +114,7 @@ fn bench_e2e_data_throughput(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("throughput", size),
             &(size, iterations),
-            |b, (&size, &iters)| {
+            |b, &(&size, &iters)| {
                 b.to_async(tokio::runtime::Runtime::new().unwrap())
                     .iter(|| async {
                         let (client_session, _server_session) = create_connected_sessions().await;

@@ -174,7 +174,7 @@ fn bench_data_frame_throughput(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("throughput", format!("{}B_x{}", size, count)),
             &(size, count),
-            |b, (&size, &count)| {
+            |b, &(&size, &count)| {
                 b.to_async(tokio::runtime::Runtime::new().unwrap())
                     .iter(|| async {
                         let mock_stream = MockStream::new();

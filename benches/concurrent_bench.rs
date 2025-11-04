@@ -129,7 +129,7 @@ fn bench_concurrent_stream_data_send(c: &mut Criterion) {
                 format!("{}streams_{}B", stream_count, data_size),
             ),
             &(stream_count, data_size),
-            |b, (&stream_count, &data_size)| {
+            |b, &(&stream_count, &data_size)| {
                 b.to_async(tokio::runtime::Runtime::new().unwrap())
                     .iter(|| async {
                         let session = Arc::new(create_test_session().await);
@@ -181,7 +181,7 @@ fn bench_concurrent_multi_session_multi_stream(c: &mut Criterion) {
                 format!("{}s_{}st", session_count, streams_per_session),
             ),
             &(session_count, streams_per_session),
-            |b, (&session_count, &streams_per_session)| {
+            |b, &(&session_count, &streams_per_session)| {
                 b.to_async(tokio::runtime::Runtime::new().unwrap())
                     .iter(|| async {
                         // Create multiple sessions
