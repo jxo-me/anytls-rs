@@ -552,7 +552,7 @@ curl --socks5-hostname 127.0.0.1:1080 http://httpbin.org/post -d "test=data"
 
 ## 🙏 致谢
 
-- [AnyTLS Go 实现](anytls-go/) - 参考实现
+- [AnyTLS Go 实现](https://github.com/anytls/anytls-go) - 参考实现
 - Rust 社区
 - 所有贡献者
 
