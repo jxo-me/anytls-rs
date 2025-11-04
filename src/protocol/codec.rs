@@ -77,8 +77,12 @@ impl Decoder for FrameCodec {
             Bytes::new()
         };
 
-        tracing::info!("[FrameCodec] ✅ decode: Successfully decoded frame cmd={:?}, stream_id={}, data_len={}", 
-            cmd, stream_id, data_len);
+        tracing::info!(
+            "[FrameCodec] ✅ decode: Successfully decoded frame cmd={:?}, stream_id={}, data_len={}",
+            cmd,
+            stream_id,
+            data_len
+        );
 
         Ok(Some(Frame {
             cmd,

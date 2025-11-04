@@ -3,7 +3,7 @@
 use crate::padding::PaddingFactory;
 use crate::server::handler::{StreamHandler, TcpProxyHandler};
 use crate::session::Session;
-use crate::util::{authenticate_client, hash_password, AnyTlsError, Result};
+use crate::util::{AnyTlsError, Result, authenticate_client, hash_password};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
@@ -173,7 +173,9 @@ async fn handle_connection(
                     || error_msg.contains("unexpected EOF")
                     || e.kind() == std::io::ErrorKind::UnexpectedEof
                 {
-                    tracing::debug!("[Server] recv_loop task ended: Connection closed by client (no close_notify) - this is normal");
+                    tracing::debug!(
+                        "[Server] recv_loop task ended: Connection closed by client (no close_notify) - this is normal"
+                    );
                 } else {
                     tracing::error!("[Server] recv_loop task error: {}", e);
                 }

@@ -5,7 +5,7 @@
 //! These benchmarks measure memory allocation and copy performance
 
 use bytes::Bytes;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
 fn bench_bytes_allocation(c: &mut Criterion) {

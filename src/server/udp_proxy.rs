@@ -114,7 +114,7 @@ async fn read_initial_request(reader: &mut StreamReader) -> Result<SocketAddr> {
     reader
         .read_exact(&mut is_connect_buf)
         .await
-        .map_err(|e| AnyTlsError::Io(e))?;
+        .map_err(AnyTlsError::Io)?;
 
     let is_connect = is_connect_buf[0];
 
@@ -133,7 +133,7 @@ async fn read_initial_request(reader: &mut StreamReader) -> Result<SocketAddr> {
     reader
         .read_exact(&mut atyp_buf)
         .await
-        .map_err(|e| AnyTlsError::Io(e))?;
+        .map_err(AnyTlsError::Io)?;
 
     let atyp = atyp_buf[0];
 
@@ -144,13 +144,13 @@ async fn read_initial_request(reader: &mut StreamReader) -> Result<SocketAddr> {
             reader
                 .read_exact(&mut ip_buf)
                 .await
-                .map_err(|e| AnyTlsError::Io(e))?;
+                .map_err(AnyTlsError::Io)?;
 
             let mut port_buf = [0u8; 2];
             reader
                 .read_exact(&mut port_buf)
                 .await
-                .map_err(|e| AnyTlsError::Io(e))?;
+                .map_err(AnyTlsError::Io)?;
 
             let ip = std::net::Ipv4Addr::from(ip_buf);
             let port = u16::from_be_bytes(port_buf);
@@ -163,13 +163,13 @@ async fn read_initial_request(reader: &mut StreamReader) -> Result<SocketAddr> {
             reader
                 .read_exact(&mut ip_buf)
                 .await
-                .map_err(|e| AnyTlsError::Io(e))?;
+                .map_err(AnyTlsError::Io)?;
 
             let mut port_buf = [0u8; 2];
             reader
                 .read_exact(&mut port_buf)
                 .await
-                .map_err(|e| AnyTlsError::Io(e))?;
+                .map_err(AnyTlsError::Io)?;
 
             let ip = std::net::Ipv6Addr::from(ip_buf);
             let port = u16::from_be_bytes(port_buf);
@@ -182,7 +182,7 @@ async fn read_initial_request(reader: &mut StreamReader) -> Result<SocketAddr> {
             reader
                 .read_exact(&mut len_buf)
                 .await
-                .map_err(|e| AnyTlsError::Io(e))?;
+                .map_err(AnyTlsError::Io)?;
 
             let domain_len = len_buf[0] as usize;
             if domain_len == 0 || domain_len > 255 {
@@ -193,7 +193,7 @@ async fn read_initial_request(reader: &mut StreamReader) -> Result<SocketAddr> {
             reader
                 .read_exact(&mut domain_buf)
                 .await
-                .map_err(|e| AnyTlsError::Io(e))?;
+                .map_err(AnyTlsError::Io)?;
 
             let domain = String::from_utf8(domain_buf)
                 .map_err(|e| AnyTlsError::Protocol(format!("Invalid domain name: {}", e)))?;
@@ -202,7 +202,7 @@ async fn read_initial_request(reader: &mut StreamReader) -> Result<SocketAddr> {
             reader
                 .read_exact(&mut port_buf)
                 .await
-                .map_err(|e| AnyTlsError::Io(e))?;
+                .map_err(AnyTlsError::Io)?;
 
             let port = u16::from_be_bytes(port_buf);
 
@@ -322,7 +322,7 @@ async fn read_udp_packet(reader: &mut StreamReader) -> Result<Vec<u8>> {
     reader
         .read_exact(&mut len_buf)
         .await
-        .map_err(|e| AnyTlsError::Io(e))?;
+        .map_err(AnyTlsError::Io)?;
 
     let len = u16::from_be_bytes(len_buf) as usize;
 
@@ -342,7 +342,7 @@ async fn read_udp_packet(reader: &mut StreamReader) -> Result<Vec<u8>> {
     reader
         .read_exact(&mut data)
         .await
-        .map_err(|e| AnyTlsError::Io(e))?;
+        .map_err(AnyTlsError::Io)?;
 
     Ok(data)
 }

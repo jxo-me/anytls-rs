@@ -1,7 +1,7 @@
 //! AnyTLS Client binary
 
 use anyhow::{Context, Result};
-use anytls_rs::client::{start_socks5_server, Client};
+use anytls_rs::client::{Client, start_socks5_server};
 use anytls_rs::padding::PaddingFactory;
 use anytls_rs::util::create_client_config;
 use std::sync::Arc;

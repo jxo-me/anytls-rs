@@ -259,7 +259,7 @@ async fn read_udp_packet(reader: &mut crate::session::StreamReader) -> Result<Ve
     reader
         .read_exact(&mut len_buf)
         .await
-        .map_err(|e| AnyTlsError::Io(e))?;
+        .map_err(AnyTlsError::Io)?;
 
     let len = u16::from_be_bytes(len_buf) as usize;
 
@@ -279,7 +279,7 @@ async fn read_udp_packet(reader: &mut crate::session::StreamReader) -> Result<Ve
     reader
         .read_exact(&mut data)
         .await
-        .map_err(|e| AnyTlsError::Io(e))?;
+        .map_err(AnyTlsError::Io)?;
 
     Ok(data)
 }

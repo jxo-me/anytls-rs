@@ -9,7 +9,7 @@ use md5;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tokio_util::codec::Decoder;
 
 /// Type alias for new stream callback channel
@@ -189,7 +189,10 @@ impl Session {
                     if is_close_notify_error {
                         // This is a normal connection close without TLS close_notify
                         // Many clients (especially HTTP clients) do this
-                        tracing::debug!("[Session] recv_loop: Connection closed by peer (no close_notify) - this is normal (iteration {})", iteration);
+                        tracing::debug!(
+                            "[Session] recv_loop: Connection closed by peer (no close_notify) - this is normal (iteration {})",
+                            iteration
+                        );
                         break;
                     } else {
                         // This is a real error
@@ -229,12 +232,25 @@ impl Session {
             let buffer_before_decode = buffer.len();
             while let Some(frame) = codec.decode(&mut buffer)? {
                 frame_count += 1;
-                tracing::debug!("[Session] recv_loop: Decoded frame #{}: cmd={:?}, stream_id={}, data_len={} (iteration {}, buffer before={}, after={})", 
-                    frame_count, frame.cmd, frame.stream_id, frame.data.len(), iteration, buffer_before_decode, buffer.len());
+                tracing::debug!(
+                    "[Session] recv_loop: Decoded frame #{}: cmd={:?}, stream_id={}, data_len={} (iteration {}, buffer before={}, after={})",
+                    frame_count,
+                    frame.cmd,
+                    frame.stream_id,
+                    frame.data.len(),
+                    iteration,
+                    buffer_before_decode,
+                    buffer.len()
+                );
                 self.handle_frame(frame).await?;
             }
             if frame_count == 0 && n > 0 {
-                tracing::debug!("[Session] recv_loop: No frames decoded from {} bytes read (iteration {}, buffer size={})", n, iteration, buffer.len());
+                tracing::debug!(
+                    "[Session] recv_loop: No frames decoded from {} bytes read (iteration {}, buffer size={})",
+                    n,
+                    iteration,
+                    buffer.len()
+                );
                 tracing::trace!(
                     "[Session] recv_loop: Buffer contents (first 50 bytes): {:?}",
                     if buffer.len() >= 50 {
@@ -285,15 +301,27 @@ impl Session {
                     );
                     match tx.send(frame.data.clone()) {
                         Ok(_) => {
-                            tracing::info!("[Session] ✅ handle_frame: Successfully sent {} bytes to stream {} via channel", data_len, frame.stream_id);
+                            tracing::info!(
+                                "[Session] ✅ handle_frame: Successfully sent {} bytes to stream {} via channel",
+                                data_len,
+                                frame.stream_id
+                            );
                         }
                         Err(e) => {
-                            tracing::error!("[Session] handle_frame: Failed to send {} bytes to stream {} via channel: {}", data_len, frame.stream_id, e);
+                            tracing::error!(
+                                "[Session] handle_frame: Failed to send {} bytes to stream {} via channel: {}",
+                                data_len,
+                                frame.stream_id,
+                                e
+                            );
                         }
                     }
                 } else {
-                    tracing::warn!("[Session] handle_frame: No receiver found for stream {} (available streams: {:?})", 
-                        frame.stream_id, receive_map.keys().collect::<Vec<_>>());
+                    tracing::warn!(
+                        "[Session] handle_frame: No receiver found for stream {} (available streams: {:?})",
+                        frame.stream_id,
+                        receive_map.keys().collect::<Vec<_>>()
+                    );
                 }
                 drop(receive_map);
                 tracing::trace!("[Session] handle_frame: Released stream_receive_tx read lock");
@@ -374,7 +402,10 @@ impl Session {
                                 AnyTlsError::Protocol(format!("Server error: {}", error_msg));
                             stream.notify_synack(Err(error)).await;
                         } else {
-                            tracing::info!("[Session] ✅ Stream {} SYNACK received (success) - stream is ready", frame.stream_id);
+                            tracing::info!(
+                                "[Session] ✅ Stream {} SYNACK received (success) - stream is ready",
+                                frame.stream_id
+                            );
                             // Notify stream about success
                             stream.notify_synack(Ok(())).await;
                         }
@@ -420,9 +451,9 @@ impl Session {
                     }
 
                     // Check client version
-                    if let Some(v_str) = settings.get("v") {
-                        if let Ok(v) = v_str.parse::<u8>() {
-                            if v >= 2 {
+                    if let Some(v_str) = settings.get("v")
+                        && let Ok(v) = v_str.parse::<u8>()
+                            && v >= 2 {
                                 self.peer_version
                                     .store(v, std::sync::atomic::Ordering::Relaxed);
 
@@ -436,21 +467,18 @@ impl Session {
                                 );
                                 self.write_frame(server_settings_frame).await?;
                             }
-                        }
-                    }
                 }
             }
             Command::ServerSettings => {
                 // Server settings (client side)
                 if self.is_client && !frame.data.is_empty() {
                     let settings = StringMap::from_bytes(&frame.data);
-                    if let Some(v_str) = settings.get("v") {
-                        if let Ok(v) = v_str.parse::<u8>() {
+                    if let Some(v_str) = settings.get("v")
+                        && let Ok(v) = v_str.parse::<u8>() {
                             self.peer_version
                                 .store(v, std::sync::atomic::Ordering::Relaxed);
                             tracing::debug!("[Session] Server version: {}", v);
                         }
-                    }
                 }
             }
             Command::UpdatePaddingScheme => {
@@ -654,14 +682,20 @@ impl Session {
             let mut buf = self.buffer.lock().await;
             if !buf.is_empty() {
                 let buffered_len = buf.len();
-                tracing::info!("[Session] 🚀 write_frame: Flushing {} buffered bytes along with new frame ({} bytes)", buffered_len, buffer.len());
+                tracing::info!(
+                    "[Session] 🚀 write_frame: Flushing {} buffered bytes along with new frame ({} bytes)",
+                    buffered_len,
+                    buffer.len()
+                );
 
                 // Log first frame's header for debugging
                 if buffered_len >= 7 {
-                    tracing::info!("[Session] 🔍 First buffered frame header: cmd={}, stream_id={:?}, data_len={:?}", 
+                    tracing::info!(
+                        "[Session] 🔍 First buffered frame header: cmd={}, stream_id={:?}, data_len={:?}",
                         buf[0],
                         u32::from_be_bytes([buf[1], buf[2], buf[3], buf[4]]),
-                        u16::from_be_bytes([buf[5], buf[6]]));
+                        u16::from_be_bytes([buf[5], buf[6]])
+                    );
                 }
 
                 let mut combined = BytesMut::from(&buf[..]);
@@ -673,11 +707,13 @@ impl Session {
 
         // Log what we're about to send
         if buffer.len() >= 7 {
-            tracing::info!("[Session] 🔍 About to send frame header: cmd={}, stream_id={:?}, data_len={:?}, total_buffer_len={}", 
+            tracing::info!(
+                "[Session] 🔍 About to send frame header: cmd={}, stream_id={:?}, data_len={:?}, total_buffer_len={}",
                 buffer[0],
                 u32::from_be_bytes([buffer[1], buffer[2], buffer[3], buffer[4]]),
                 u16::from_be_bytes([buffer[5], buffer[6]]),
-                buffer.len());
+                buffer.len()
+            );
         }
 
         // Write with padding if enabled
@@ -773,7 +809,11 @@ impl Session {
                 // This packet is all payload - send exactly size bytes
                 // Note: This may split a frame in the middle, but that's okay for TLS records
                 // The receiver will reassemble frames from the stream
-                tracing::info!("[Session] write_with_padding: ⚠️ Splitting payload: sending {} bytes (remain={})", size, remain_payload_len);
+                tracing::info!(
+                    "[Session] write_with_padding: ⚠️ Splitting payload: sending {} bytes (remain={})",
+                    size,
+                    remain_payload_len
+                );
                 if size >= 7 {
                     tracing::info!(
                         "[Session] write_with_padding: First 7 bytes being sent: {:?}",
@@ -876,7 +916,9 @@ impl Session {
                         || error_msg.contains("unexpected EOF")
                         || e.kind() == std::io::ErrorKind::UnexpectedEof
                     {
-                        tracing::debug!("[Session] recv_loop task ended: Connection closed by peer (no close_notify) - this is normal");
+                        tracing::debug!(
+                            "[Session] recv_loop task ended: Connection closed by peer (no close_notify) - this is normal"
+                        );
                     } else {
                         tracing::error!("[Session] recv_loop task error: {}", e);
                     }
@@ -890,7 +932,10 @@ impl Session {
         // Start stream data processing in background
         let session = Arc::clone(&self);
         tokio::spawn(async move {
-            tracing::info!("[Session] ✅ process_stream_data task spawned! Starting stream data processing (client={})", session.is_client);
+            tracing::info!(
+                "[Session] ✅ process_stream_data task spawned! Starting stream data processing (client={})",
+                session.is_client
+            );
             if let Err(e) = session.process_stream_data().await {
                 tracing::error!("[Session] process_stream_data task error: {}", e);
             } else {
@@ -923,24 +968,43 @@ impl Session {
             match result {
                 Some((stream_id, data)) => {
                     if self.is_closed() {
-                        tracing::debug!("[Session] process_stream_data: Session closed, breaking (iteration {})", iteration);
+                        tracing::debug!(
+                            "[Session] process_stream_data: Session closed, breaking (iteration {})",
+                            iteration
+                        );
                         break;
                     }
-                    tracing::debug!("[Session] process_stream_data: Received {} bytes from stream {} (iteration {})", 
-                        data.len(), stream_id, iteration);
+                    tracing::debug!(
+                        "[Session] process_stream_data: Received {} bytes from stream {} (iteration {})",
+                        data.len(),
+                        stream_id,
+                        iteration
+                    );
                     // Send data frame
                     match self.write_data_frame(stream_id, data).await {
                         Ok(_) => {
-                            tracing::debug!("[Session] process_stream_data: Successfully wrote data frame for stream {} (iteration {})", stream_id, iteration);
+                            tracing::debug!(
+                                "[Session] process_stream_data: Successfully wrote data frame for stream {} (iteration {})",
+                                stream_id,
+                                iteration
+                            );
                         }
                         Err(e) => {
-                            tracing::error!("[Session] process_stream_data: Failed to write data frame for stream {}: {} (iteration {})", stream_id, e, iteration);
+                            tracing::error!(
+                                "[Session] process_stream_data: Failed to write data frame for stream {}: {} (iteration {})",
+                                stream_id,
+                                e,
+                                iteration
+                            );
                             return Err(e);
                         }
                     }
                 }
                 None => {
-                    tracing::debug!("[Session] process_stream_data: Channel closed, exiting after {} iterations", iteration);
+                    tracing::debug!(
+                        "[Session] process_stream_data: Channel closed, exiting after {} iterations",
+                        iteration
+                    );
                     break;
                 }
             }
@@ -973,7 +1037,7 @@ impl Session {
 mod tests {
     use super::*;
     use crate::padding::PaddingFactory;
-    use tokio::io::{duplex, DuplexStream};
+    use tokio::io::{DuplexStream, duplex};
 
     /// 创建一对连接的双工流（用于测试）
     fn create_connected_streams() -> (DuplexStream, DuplexStream) {

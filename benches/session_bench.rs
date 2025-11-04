@@ -7,7 +7,7 @@ use anytls_rs::protocol::{Command, Frame};
 use anytls_rs::session::Session;
 use anytls_rs::util::auth;
 use bytes::Bytes;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -163,8 +163,8 @@ fn bench_frame_decode(c: &mut Criterion) {
             b.iter(|| {
                 let mut decode_codec = FrameCodec;
                 let result = decode_codec.decode(&mut buffer);
-                if result.is_ok() && result.as_ref().unwrap().is_some() {
-                    black_box(result.unwrap().unwrap());
+                if let Ok(Some(frame)) = result {
+                    black_box(frame);
                 }
                 // Reset buffer for next iteration
                 buffer = encoded.clone();
@@ -277,12 +277,10 @@ fn bench_session_control_frames(c: &mut Criterion) {
     let mut group = c.benchmark_group("session_control_frames");
 
     // Test different control frame types
-    let frame_types = vec![
-        (Command::Syn, "syn"),
+    let frame_types = [(Command::Syn, "syn"),
         (Command::Fin, "fin"),
         (Command::HeartRequest, "heart_request"),
-        (Command::HeartResponse, "heart_response"),
-    ];
+        (Command::HeartResponse, "heart_response")];
 
     for (cmd, name) in frame_types.iter() {
         group.bench_with_input(BenchmarkId::from_parameter(name), cmd, |b, &cmd| {

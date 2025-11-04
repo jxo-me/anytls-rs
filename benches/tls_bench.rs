@@ -5,7 +5,7 @@
 //! These benchmarks measure TLS configuration and certificate generation performance
 
 use anytls_rs::util::tls;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
 fn bench_tls_generate_key_pair(c: &mut Criterion) {

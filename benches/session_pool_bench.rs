@@ -7,7 +7,7 @@
 use anytls_rs::client::session_pool::{SessionPool, SessionPoolConfig};
 use anytls_rs::padding::PaddingFactory;
 use anytls_rs::session::Session;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};

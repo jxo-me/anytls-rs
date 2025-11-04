@@ -7,8 +7,8 @@ use crate::util::{AnyTlsError, Result};
 use bytes::Bytes;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::{mpsc, oneshot};
@@ -68,20 +68,23 @@ impl Stream {
     /// * `result` - Ok(()) for success, Err for error
     pub async fn notify_synack(&self, result: Result<()>) {
         let mut tx_guard = self.synack_tx.lock().await;
-        match tx_guard.take() { Some(tx) => {
-            let result_clone = match &result {
-                Ok(()) => Ok(()),
-                Err(e) => Err(AnyTlsError::Protocol(e.to_string())),
-            };
-            let _ = tx.send(result_clone);
-            tracing::debug!(
-                "[Stream] SYNACK notified for stream {}: {:?}",
-                self.id,
-                result.is_ok()
-            );
-        } _ => {
-            tracing::warn!("[Stream] SYNACK already notified for stream {}", self.id);
-        }}
+        match tx_guard.take() {
+            Some(tx) => {
+                let result_clone = match &result {
+                    Ok(()) => Ok(()),
+                    Err(e) => Err(AnyTlsError::Protocol(e.to_string())),
+                };
+                let _ = tx.send(result_clone);
+                tracing::debug!(
+                    "[Stream] SYNACK notified for stream {}: {:?}",
+                    self.id,
+                    result.is_ok()
+                );
+            }
+            _ => {
+                tracing::warn!("[Stream] SYNACK already notified for stream {}", self.id);
+            }
+        }
     }
 
     /// Get stream ID
@@ -210,7 +213,12 @@ impl AsyncWrite for Stream {
                 Poll::Ready(Ok(buf.len()))
             }
             Err(e) => {
-                tracing::error!("[Stream] poll_write: ❌ Failed to send {} bytes to channel for stream {}: {:?}", buf_len, stream_id, e);
+                tracing::error!(
+                    "[Stream] poll_write: ❌ Failed to send {} bytes to channel for stream {}: {:?}",
+                    buf_len,
+                    stream_id,
+                    e
+                );
                 Poll::Ready(Err(std::io::Error::new(
                     std::io::ErrorKind::BrokenPipe,
                     "session channel closed",

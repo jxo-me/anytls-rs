@@ -4,7 +4,7 @@ use anytls_rs::*;
 use bytes::Bytes;
 use std::sync::Arc;
 use tokio::io::duplex;
-use tokio::time::{timeout, Duration};
+use tokio::time::{Duration, timeout};
 
 #[tokio::test]
 async fn test_synack_success() {

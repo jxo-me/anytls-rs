@@ -2,11 +2,11 @@
 
 use crate::session::Session;
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
-use tokio::time::{interval, Duration, Instant};
+use tokio::time::{Duration, Instant, interval};
 
 /// Configuration for session pool
 #[derive(Debug, Clone)]
@@ -248,15 +248,14 @@ impl SessionPool {
 
                 if !to_remove.is_empty() {
                     for seq in &to_remove {
-                        if let Some(pooled) = sessions.remove(seq) {
-                            if let Err(e) = pooled.session.close().await {
+                        if let Some(pooled) = sessions.remove(seq)
+                            && let Err(e) = pooled.session.close().await {
                                 tracing::warn!(
                                     "[SessionPool] Failed to close session {}: {}",
                                     seq,
                                     e
                                 );
                             }
-                        }
                     }
 
                     tracing::info!(
@@ -287,11 +286,10 @@ impl Drop for SessionPool {
     fn drop(&mut self) {
         // Attempt to stop cleanup task
         // Note: This is best-effort since Drop is sync
-        if let Ok(mut task) = self.cleanup_task.try_lock() {
-            if let Some(handle) = task.take() {
+        if let Ok(mut task) = self.cleanup_task.try_lock()
+            && let Some(handle) = task.take() {
                 handle.abort();
             }
-        }
     }
 }
 

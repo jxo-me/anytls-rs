@@ -132,8 +132,12 @@ async fn handle_socks5_connection(
                 || error_str.contains("DNS")
                 || error_str.contains("Try again")
             {
-                tracing::error!("[SOCKS5] DNS resolution failed. Server address may be incorrect or unreachable.");
-                tracing::error!("[SOCKS5] Check: 1) Server is running, 2) Server address is correct, 3) Network connectivity");
+                tracing::error!(
+                    "[SOCKS5] DNS resolution failed. Server address may be incorrect or unreachable."
+                );
+                tracing::error!(
+                    "[SOCKS5] Check: 1) Server is running, 2) Server address is correct, 3) Network connectivity"
+                );
             }
             send_connection_reply(&mut client_conn, REPLY_GENERAL_FAILURE, dest_addr.clone())
                 .await?;
@@ -304,7 +308,13 @@ async fn handle_socks5_connection(
                     );
                 }
                 Err(e) => {
-                    tracing::error!("[SOCKS5-Task2] Error writing {} bytes to proxy stream {}: {} (iteration {})", n, stream_id, e, iteration);
+                    tracing::error!(
+                        "[SOCKS5-Task2] Error writing {} bytes to proxy stream {}: {} (iteration {})",
+                        n,
+                        stream_id,
+                        e,
+                        iteration
+                    );
                     break;
                 }
             }

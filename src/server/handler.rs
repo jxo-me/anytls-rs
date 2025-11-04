@@ -294,7 +294,10 @@ async fn proxy_tcp_connection_with_synack_internal(
     }
 
     // Now forward data bidirectionally
-    tracing::info!("[Proxy] 🔄 proxy_tcp_connection_with_synack: Calling proxy_tcp_connection_data_forwarding for stream {}", stream_id);
+    tracing::info!(
+        "[Proxy] 🔄 proxy_tcp_connection_with_synack: Calling proxy_tcp_connection_data_forwarding for stream {}",
+        stream_id
+    );
     proxy_tcp_connection_data_forwarding(stream, outbound, destination).await
 }
 

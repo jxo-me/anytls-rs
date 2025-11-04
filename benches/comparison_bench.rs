@@ -10,7 +10,7 @@ use anytls_rs::protocol::FrameCodec;
 use anytls_rs::protocol::{Command, Frame};
 use anytls_rs::session::Session;
 use bytes::{Bytes, BytesMut};
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};

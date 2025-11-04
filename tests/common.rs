@@ -2,7 +2,7 @@
 
 use anytls_rs::{client::Client, server::Server, util::tls};
 use std::sync::Arc;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 /// Test configuration
 pub struct TestConfig {

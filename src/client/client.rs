@@ -3,7 +3,7 @@
 use crate::client::SessionPool;
 use crate::padding::PaddingFactory;
 use crate::session::Session;
-use crate::util::{hash_password, send_authentication, AnyTlsError, Result};
+use crate::util::{AnyTlsError, Result, hash_password, send_authentication};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use tokio::net::TcpStream;
@@ -232,11 +232,20 @@ impl Client {
                         "[Client]   3. Test DNS: nslookup $(echo {} | cut -d: -f1)",
                         self.server_addr
                     );
-                    tracing::error!("[Client]   4. Test TCP connection: nc -zv $(echo {} | cut -d: -f1) $(echo {} | cut -d: -f2)", self.server_addr, self.server_addr);
+                    tracing::error!(
+                        "[Client]   4. Test TCP connection: nc -zv $(echo {} | cut -d: -f1) $(echo {} | cut -d: -f2)",
+                        self.server_addr,
+                        self.server_addr
+                    );
                 } else if error_str.contains("Connection refused") {
-                    tracing::error!("[Client] Connection refused. Server may not be running or not listening on {}", self.server_addr);
+                    tracing::error!(
+                        "[Client] Connection refused. Server may not be running or not listening on {}",
+                        self.server_addr
+                    );
                 } else if error_str.contains("Connection timed out") {
-                    tracing::error!("[Client] Connection timed out. Check network connectivity and firewall settings");
+                    tracing::error!(
+                        "[Client] Connection timed out. Check network connectivity and firewall settings"
+                    );
                 }
 
                 return Err(AnyTlsError::Io(e));

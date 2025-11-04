@@ -4,7 +4,7 @@ mod common;
 
 use anyhow::Result;
 use common::*;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 #[tokio::test]
 async fn test_server_startup() -> Result<()> {
