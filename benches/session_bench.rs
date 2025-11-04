@@ -277,10 +277,12 @@ fn bench_session_control_frames(c: &mut Criterion) {
     let mut group = c.benchmark_group("session_control_frames");
 
     // Test different control frame types
-    let frame_types = [(Command::Syn, "syn"),
+    let frame_types = [
+        (Command::Syn, "syn"),
         (Command::Fin, "fin"),
         (Command::HeartRequest, "heart_request"),
-        (Command::HeartResponse, "heart_response")];
+        (Command::HeartResponse, "heart_response"),
+    ];
 
     for (cmd, name) in frame_types.iter() {
         group.bench_with_input(BenchmarkId::from_parameter(name), cmd, |b, &cmd| {

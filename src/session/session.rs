@@ -453,20 +453,21 @@ impl Session {
                     // Check client version
                     if let Some(v_str) = settings.get("v")
                         && let Ok(v) = v_str.parse::<u8>()
-                            && v >= 2 {
-                                self.peer_version
-                                    .store(v, std::sync::atomic::Ordering::Relaxed);
+                        && v >= 2
+                    {
+                        self.peer_version
+                            .store(v, std::sync::atomic::Ordering::Relaxed);
 
-                                // Send ServerSettings
-                                let mut server_settings = StringMap::new();
-                                server_settings.insert("v", "2");
-                                let server_settings_frame = Frame::with_data(
-                                    Command::ServerSettings,
-                                    0,
-                                    Bytes::from(server_settings.to_bytes()),
-                                );
-                                self.write_frame(server_settings_frame).await?;
-                            }
+                        // Send ServerSettings
+                        let mut server_settings = StringMap::new();
+                        server_settings.insert("v", "2");
+                        let server_settings_frame = Frame::with_data(
+                            Command::ServerSettings,
+                            0,
+                            Bytes::from(server_settings.to_bytes()),
+                        );
+                        self.write_frame(server_settings_frame).await?;
+                    }
                 }
             }
             Command::ServerSettings => {
@@ -474,11 +475,12 @@ impl Session {
                 if self.is_client && !frame.data.is_empty() {
                     let settings = StringMap::from_bytes(&frame.data);
                     if let Some(v_str) = settings.get("v")
-                        && let Ok(v) = v_str.parse::<u8>() {
-                            self.peer_version
-                                .store(v, std::sync::atomic::Ordering::Relaxed);
-                            tracing::debug!("[Session] Server version: {}", v);
-                        }
+                        && let Ok(v) = v_str.parse::<u8>()
+                    {
+                        self.peer_version
+                            .store(v, std::sync::atomic::Ordering::Relaxed);
+                        tracing::debug!("[Session] Server version: {}", v);
+                    }
                 }
             }
             Command::UpdatePaddingScheme => {

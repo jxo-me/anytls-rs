@@ -249,13 +249,10 @@ impl SessionPool {
                 if !to_remove.is_empty() {
                     for seq in &to_remove {
                         if let Some(pooled) = sessions.remove(seq)
-                            && let Err(e) = pooled.session.close().await {
-                                tracing::warn!(
-                                    "[SessionPool] Failed to close session {}: {}",
-                                    seq,
-                                    e
-                                );
-                            }
+                            && let Err(e) = pooled.session.close().await
+                        {
+                            tracing::warn!("[SessionPool] Failed to close session {}: {}", seq, e);
+                        }
                     }
 
                     tracing::info!(
@@ -287,9 +284,10 @@ impl Drop for SessionPool {
         // Attempt to stop cleanup task
         // Note: This is best-effort since Drop is sync
         if let Ok(mut task) = self.cleanup_task.try_lock()
-            && let Some(handle) = task.take() {
-                handle.abort();
-            }
+            && let Some(handle) = task.take()
+        {
+            handle.abort();
+        }
     }
 }
 
