@@ -114,7 +114,19 @@ jobs:
           elif [ "${{ matrix.target }}" == "x86_64-unknown-linux-musl" ]; then
             sudo apt-get install -y musl-tools
           elif [ "${{ matrix.target }}" == "aarch64-unknown-linux-musl" ]; then
-            sudo apt-get install -y musl-tools gcc-aarch64-linux-musl
+            # Install musl-tools for base musl support
+            sudo apt-get install -y musl-tools
+            # Install musl-cross toolchain from musl.cc
+            # Download and extract musl-cross-make for aarch64
+            cd /tmp
+            wget -q https://musl.cc/aarch64-linux-musl-cross.tgz || \
+              (echo "Failed to download musl-cross, trying alternative method..." && \
+               sudo apt-get install -y gcc-aarch64-linux-gnu && \
+               echo "Using gcc-aarch64-linux-gnu as fallback")
+            if [ -f aarch64-linux-musl-cross.tgz ]; then
+              tar -xzf aarch64-linux-musl-cross.tgz
+              echo "$(pwd)/aarch64-linux-musl-cross/bin" >> $GITHUB_PATH
+            fi
           fi
       
       - name: Configure cross-compilation linker (Linux)
@@ -132,10 +144,26 @@ jobs:
           linker = "x86_64-linux-musl-gcc"
           EOF
           elif [ "${{ matrix.target }}" == "aarch64-unknown-linux-musl" ]; then
+            # Check if musl-cross is available, otherwise use fallback
+            if command -v aarch64-linux-musl-gcc &> /dev/null; then
+              LINKER="aarch64-linux-musl-gcc"
+            elif command -v aarch64-linux-gnu-gcc &> /dev/null; then
+              # Fallback to gnu toolchain with musl target
+              LINKER="aarch64-linux-gnu-gcc"
+            else
+              echo "❌ Error: No suitable linker found for aarch64-unknown-linux-musl"
+              exit 1
+            fi
             cat >> .cargo/config.toml <<EOF
           [target.aarch64-unknown-linux-musl]
-          linker = "aarch64-linux-musl-gcc"
+          linker = "$LINKER"
           EOF
+            # Also set CC and AR environment variables for build scripts (aws-lc-sys)
+            TARGET_VAR=$(echo "aarch64_unknown_linux_musl" | tr '[:lower:]' '[:upper:]')
+            echo "CC_${TARGET_VAR}=$LINKER" >> $GITHUB_ENV
+            AR_TOOL="${LINKER%-gcc}-ar"
+            echo "AR_${TARGET_VAR}=$AR_TOOL" >> $GITHUB_ENV
+            echo "✅ Configured linker: $LINKER, ar: $AR_TOOL"
           fi
       
       - name: Cache cargo registry
