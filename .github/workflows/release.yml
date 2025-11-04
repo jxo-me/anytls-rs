@@ -197,6 +197,8 @@ jobs:
     name: Publish to crates.io
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -253,6 +255,9 @@ jobs:
     needs: [build, publish]
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
+    permissions:
+      contents: write
+      artifacts: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -366,8 +371,7 @@ jobs:
           draft: false
           prerelease: false
           generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Release summary
         run: |
