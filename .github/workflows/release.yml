@@ -92,7 +92,18 @@ jobs:
         run: |
           sudo apt-get update
           if [ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]; then
-            sudo apt-get install -y gcc-aarch64-linux-gnu
+            sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+          fi
+      
+      - name: Configure cross-compilation linker (Linux)
+        if: matrix.os == 'ubuntu-latest' && matrix.arch != 'x86_64'
+        run: |
+          if [ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]; then
+            mkdir -p .cargo
+            cat >> .cargo/config.toml <<EOF
+          [target.aarch64-unknown-linux-gnu]
+          linker = "aarch64-linux-gnu-gcc"
+          EOF
           fi
       
       - name: Cache cargo registry
@@ -124,7 +135,7 @@ jobs:
             cp target/${{ matrix.target }}/release/anytls-client${{ matrix.binary_ext }} release/anytls-client${{ matrix.binary_ext }}
             cp target/${{ matrix.target }}/release/anytls-server${{ matrix.binary_ext }} release/anytls-server${{ matrix.binary_ext }}
             cd release
-            powershell Compress-Archive -Path * -DestinationPath ../${ARTIFACT_NAME}.zip
+            powershell -Command "\$files = @('anytls-client${{ matrix.binary_ext }}', 'anytls-server${{ matrix.binary_ext }}'); Compress-Archive -Path \$files -DestinationPath '../${ARTIFACT_NAME}.zip' -Force"
             cd ..
             echo "ARTIFACT_PATH=${ARTIFACT_NAME}.zip" >> $GITHUB_ENV
           else
