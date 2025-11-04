@@ -40,6 +40,24 @@ jobs:
             archive_ext: tar.gz
             archive_cmd: tar czf
           
+          # Linux x86_64 (musl)
+          - os: ubuntu-latest
+            arch: x86_64
+            target: x86_64-unknown-linux-musl
+            artifact_name: anytls-linux-x86_64-musl
+            binary_ext: ""
+            archive_ext: tar.gz
+            archive_cmd: tar czf
+          
+          # Linux ARM64 (musl)
+          - os: ubuntu-latest
+            arch: aarch64
+            target: aarch64-unknown-linux-musl
+            artifact_name: anytls-linux-aarch64-musl
+            binary_ext: ""
+            archive_ext: tar.gz
+            archive_cmd: tar czf
+          
           # macOS x86_64 (Intel)
           - os: macos-latest
             arch: x86_64
@@ -88,23 +106,22 @@ jobs:
           targets: ${{ matrix.target }}
       
       - name: Install cross-compilation dependencies (Linux)
-        if: matrix.os == 'ubuntu-latest' && matrix.arch != 'x86_64'
+        if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
           if [ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]; then
             sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
           fi
+          # Note: musl targets are self-contained in Rust toolchain, no additional tools needed
       
       - name: Configure cross-compilation linker (Linux)
-        if: matrix.os == 'ubuntu-latest' && matrix.arch != 'x86_64'
+        if: matrix.os == 'ubuntu-latest' && matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
-          if [ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]; then
-            mkdir -p .cargo
-            cat >> .cargo/config.toml <<EOF
+          mkdir -p .cargo
+          cat >> .cargo/config.toml <<EOF
           [target.aarch64-unknown-linux-gnu]
           linker = "aarch64-linux-gnu-gcc"
           EOF
-          fi
       
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -252,7 +269,7 @@ jobs:
 
   create-release:
     name: Create GitHub Release
-    needs: [build, publish]
+    needs: [build, checksum]
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
     permissions:
@@ -317,8 +334,10 @@ jobs:
           ### Pre-built Binaries
           
           **Linux:**
-          - \`anytls-linux-x86_64-$TAG.tar.gz\` - Linux x86_64 (Intel/AMD)
-          - \`anytls-linux-aarch64-$TAG.tar.gz\` - Linux ARM64
+          - \`anytls-linux-x86_64-$TAG.tar.gz\` - Linux x86_64 (Intel/AMD, GNU)
+          - \`anytls-linux-aarch64-$TAG.tar.gz\` - Linux ARM64 (GNU)
+          - \`anytls-linux-x86_64-musl-$TAG.tar.gz\` - Linux x86_64 (Intel/AMD, musl)
+          - \`anytls-linux-aarch64-musl-$TAG.tar.gz\` - Linux ARM64 (musl)
           
           **macOS:**
           - \`anytls-macos-x86_64-$TAG.tar.gz\` - macOS Intel
