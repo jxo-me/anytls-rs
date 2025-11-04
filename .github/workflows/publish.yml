@@ -53,7 +53,7 @@ jobs:
       - name: Verify package metadata
         run: |
           cargo package --list
-          cargo package --verify
+          cargo package
       
       - name: Check version match
         if: github.event_name == 'release'

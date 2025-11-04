@@ -145,6 +145,7 @@ jobs:
             tar czf ${ARTIFACT_NAME}.tar.gz -C release .
             echo "ARTIFACT_PATH=${ARTIFACT_NAME}.tar.gz" >> $GITHUB_ENV
           fi
+          
           echo "ARTIFACT_PATH=${ARTIFACT_NAME}.*" >> $GITHUB_ENV
       
       - name: Upload artifacts
@@ -221,7 +222,7 @@ jobs:
       - name: Verify package metadata
         run: |
           cargo package --list
-          cargo package --verify
+          cargo package
       
       - name: Check version matches tag
         run: |
