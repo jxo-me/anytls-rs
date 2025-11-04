@@ -48,25 +48,95 @@ jobs:
           restore-keys: |
             ubuntu-cargo-bench-
       
-      - name: Install criterion
-        run: cargo install cargo-criterion || true
-      
-      - name: Run benchmarks
-        run: |
-          # Run all benchmarks and save baseline
-          for bench in session_bench stream_bench e2e_bench concurrent_bench session_pool_bench tls_bench client_server_bench memory_bench edge_cases_bench comparison_bench; do
-            echo "Running benchmark: $bench"
-            cargo bench --bench $bench -- --save-baseline main || true
-          done
-      
-      - name: Compare with baseline
+      - name: Setup benchmark baselines
         if: github.event_name == 'pull_request'
         run: |
-          # Compare with main branch baseline
+          # Checkout main branch to get baseline
+          echo "📊 Setting up baseline from main branch..."
+          git fetch origin main:main || git fetch origin main
+          git checkout main || git checkout origin/main
+          
+          # Run benchmarks on main branch to establish baseline
           for bench in session_bench stream_bench e2e_bench concurrent_bench session_pool_bench tls_bench client_server_bench memory_bench edge_cases_bench comparison_bench; do
-            echo "Comparing benchmark: $bench"
-            cargo bench --bench $bench -- --baseline main --threshold 0.05 || true
+            echo "Running baseline benchmark: $bench"
+            cargo bench --bench $bench -- --save-baseline main-base || true
           done
+          
+          # Switch back to PR branch
+          git checkout ${{ github.head_ref }}
+          git checkout -- .
+      
+      - name: Run benchmarks on PR branch
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "🚀 Running benchmarks on PR branch..."
+          for bench in session_bench stream_bench e2e_bench concurrent_bench session_pool_bench tls_bench client_server_bench memory_bench edge_cases_bench comparison_bench; do
+            echo "Running benchmark: $bench"
+            cargo bench --bench $bench -- --save-baseline pr-${{ github.sha }} || true
+          done
+      
+      - name: Run benchmarks on main branch
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          echo "📊 Running benchmarks on main branch..."
+          for bench in session_bench stream_bench e2e_bench concurrent_bench session_pool_bench tls_bench client_server_bench memory_bench edge_cases_bench comparison_bench; do
+            echo "Running benchmark: $bench"
+            cargo bench --bench $bench -- --save-baseline main-${{ github.sha }} || true
+          done
+      
+      - name: Run benchmarks (scheduled)
+        if: github.event_name == 'schedule'
+        run: |
+          echo "📊 Running scheduled benchmarks..."
+          for bench in session_bench stream_bench e2e_bench concurrent_bench session_pool_bench tls_bench client_server_bench memory_bench edge_cases_bench comparison_bench; do
+            echo "Running benchmark: $bench"
+            cargo bench --bench $bench -- --save-baseline scheduled-${{ github.sha }} || true
+          done
+      
+      - name: Compare benchmarks (PR)
+        if: github.event_name == 'pull_request'
+        id: compare
+        continue-on-error: true
+        run: |
+          echo "📈 Comparing PR benchmarks with main baseline..."
+          BENCHMARKS="session_bench stream_bench e2e_bench concurrent_bench session_pool_bench tls_bench client_server_bench memory_bench edge_cases_bench comparison_bench"
+          REGRESSIONS=""
+          IMPROVEMENTS=""
+          
+          for bench in $BENCHMARKS; do
+            echo "Comparing benchmark: $bench"
+            if cargo bench --bench $bench -- --baseline main-base --threshold 0.05 2>&1 | tee /tmp/bench-${bench}.log; then
+              echo "✅ $bench: No significant regression"
+            else
+              EXIT_CODE=$?
+              if [ $EXIT_CODE -ne 0 ]; then
+                # Check if it's a regression or improvement
+                if grep -q "regressed" /tmp/bench-${bench}.log; then
+                  REGRESSIONS="${REGRESSIONS}\n- ❌ $bench: Performance regression detected"
+                elif grep -q "improved" /tmp/bench-${bench}.log; then
+                  IMPROVEMENTS="${IMPROVEMENTS}\n- ✅ $bench: Performance improved"
+                else
+                  REGRESSIONS="${REGRESSIONS}\n- ⚠️ $bench: Benchmark comparison failed"
+                fi
+              fi
+            fi
+          done
+          
+          # Output for GitHub Actions
+          echo "regressions<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$REGRESSIONS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+          echo "improvements<<EOF" >> $GITHUB_OUTPUT
+          echo -e "$IMPROVEMENTS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+          # Set conclusion
+          if [ -n "$REGRESSIONS" ]; then
+            echo "has_regressions=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_regressions=false" >> $GITHUB_OUTPUT
+          fi
       
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
@@ -78,24 +148,81 @@ jobs:
       - name: Comment benchmark results on PR
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
+        env:
+          REGRESSIONS: ${{ steps.compare.outputs.regressions }}
+          IMPROVEMENTS: ${{ steps.compare.outputs.improvements }}
+          HAS_REGRESSIONS: ${{ steps.compare.outputs.has_regressions }}
         with:
           script: |
             const fs = require('fs');
             const path = require('path');
             
-            // Try to find benchmark comparison results
-            const criterionPath = 'target/criterion';
-            if (fs.existsSync(criterionPath)) {
-              const results = [];
-              // This is a simplified version - in practice you'd parse the actual results
-              results.push('### Benchmark Results');
-              results.push('Benchmarks completed. Check the uploaded artifacts for detailed results.');
-              
-              github.rest.issues.createComment({
-                issue_number: context.issue.number,
+            let comment = '## 📊 Benchmark Results\n\n';
+            
+            // Add improvements if any
+            if (process.env.IMPROVEMENTS && process.env.IMPROVEMENTS.trim() !== '') {
+              comment += '### ✅ Performance Improvements\n';
+              comment += process.env.IMPROVEMENTS + '\n\n';
+            }
+            
+            // Add regressions if any
+            if (process.env.REGRESSIONS && process.env.REGRESSIONS.trim() !== '') {
+              comment += '### ⚠️ Performance Regressions\n';
+              comment += process.env.REGRESSIONS + '\n\n';
+              comment += '> **Note**: Performance regressions detected. Please review the changes.\n';
+              comment += '> Threshold: 5% change is considered significant.\n\n';
+            } else if (process.env.IMPROVEMENTS && process.env.IMPROVEMENTS.trim() !== '') {
+              comment += '### ✅ No Performance Regressions\n';
+              comment += 'All benchmarks passed! No significant regressions detected.\n\n';
+            } else {
+              comment += '### ✅ Benchmarks Completed\n';
+              comment += 'No significant performance changes detected (within 5% threshold).\n\n';
+            }
+            
+            // Add artifact link
+            comment += '### 📦 Detailed Results\n';
+            comment += 'Check the uploaded artifacts for detailed benchmark reports.\n';
+            comment += 'You can download them from the "Summary" tab of this workflow run.\n\n';
+            
+            comment += '---\n';
+            comment += '*This comment is automatically generated by the benchmark workflow.*';
+            
+            // Find existing comment to update
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            
+            const botComment = comments.data.find(
+              comment => comment.user.type === 'Bot' && comment.body.includes('## 📊 Benchmark Results')
+            );
+            
+            if (botComment) {
+              // Update existing comment
+              await github.rest.issues.updateComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                body: results.join('\n')
+                comment_id: botComment.id,
+                body: comment
               });
+            } else {
+              // Create new comment
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: comment
+              });
+            }
+            
+            // Set job conclusion based on regressions
+            const core = require('@actions/core');
+            if (process.env.HAS_REGRESSIONS === 'true') {
+              core.setOutput('benchmark_status', 'regression');
+              // Don't fail the job, just warn
+              core.warning('Performance regressions detected');
+            } else {
+              core.setOutput('benchmark_status', 'success');
             }
 

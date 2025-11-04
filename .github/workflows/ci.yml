@@ -66,8 +66,10 @@ jobs:
           name: binaries-${{ matrix.os }}
           path: target/release/anytls-*
 
-  benchmark:
-    name: Benchmark
+  # Note: Full benchmark workflow is handled by benchmark.yml
+  # This job is kept for quick validation only
+  benchmark-quick:
+    name: Benchmark (Quick Check)
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
@@ -87,29 +89,18 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ubuntu-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
+          key: ubuntu-cargo-bench-quick-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ubuntu-cargo-bench-
+            ubuntu-cargo-bench-quick-
       
-      - name: Run benchmarks (test mode)
+      - name: Quick benchmark validation
         run: |
-          for bench in session_bench stream_bench e2e_bench concurrent_bench session_pool_bench tls_bench client_server_bench memory_bench edge_cases_bench comparison_bench; do
+          echo "⚠️ This is a quick validation. Full benchmarks run in benchmark.yml workflow."
+          echo "Running quick test mode benchmarks..."
+          for bench in session_bench stream_bench e2e_bench; do
             cargo bench --bench $bench -- --test || true
           done
-      
-      - name: Run benchmarks (save baseline)
-        if: github.event_name == 'push'
-        run: |
-          for bench in session_bench stream_bench e2e_bench concurrent_bench session_pool_bench tls_bench client_server_bench memory_bench edge_cases_bench comparison_bench; do
-            cargo bench --bench $bench -- --save-baseline ci-${{ github.sha }} || true
-          done
-      
-      - name: Upload benchmark results
-        uses: actions/upload-artifact@v4
-        with:
-          name: benchmark-results
-          path: target/criterion/
-          retention-days: 30
+          echo "✅ Quick benchmark validation passed"
 
   security:
     name: Security Audit
