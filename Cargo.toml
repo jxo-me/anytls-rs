@@ -1,14 +1,14 @@
 [package]
 name = "anytls-rs"
 version = "0.3.0"
-edition = "2021"
+edition = "2024"
 authors = ["Mickey <mickey@jxo.me>", "AnyTLS Contributors"]
-description = "AnyTLS protocol implementation in Rust - Heartbeat, UDP over TCP, Session pool enhancements, SYNACK timeout"
+description = "Async TLS proxy with SOCKS5 support for privacy and security."
 license = "MIT"
 repository = "https://github.com/jxo-me/anytls-rs"
 homepage = "https://github.com/jxo-me/anytls-rs"
 documentation = "https://docs.rs/anytls-rs"
-keywords = ["anytls", "tls", "proxy", "socks5", "privacy", "security"]
+keywords = ["anytls", "tls", "proxy", "socks5", "security"]
 categories = ["network-programming", "cryptography", "asynchronous"]
 readme = "README.md"
 
