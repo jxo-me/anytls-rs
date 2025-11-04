@@ -1,9 +1,11 @@
 # AnyTLS-RS
 
-[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/yourusername/anytls-rs)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/jxo-me/anytls-rs)
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
+[![Edition](https://img.shields.io/badge/edition-2024-blue.svg)](https://doc.rust-lang.org/edition-guide/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-45%2F45-brightgreen.svg)](docs/V0.3.0_FINAL_SUMMARY.md)
+[![CI/CD](https://img.shields.io/badge/CI%2FCD-passing-brightgreen.svg)](.github/workflows)
 
 高性能的 AnyTLS 协议 Rust 实现，用于缓解 TLS-in-TLS 指纹识别问题。
 
@@ -28,6 +30,18 @@
   - 消除锁竞争和死锁
   - 性能提升 40-60%
   - 所有测试 100% 通过
+
+- [x] ✅ **Rust 2024 Edition 迁移**（2025-11-04）
+  - 迁移到 Rust 2024 edition
+  - 修复所有 edition 兼容性问题
+  - 代码格式化优化
+  - 修复所有 Clippy 警告
+
+- [x] ✅ **CI/CD 流程完善**（2025-11-04）
+  - PR 性能基准测试对比
+  - 自动性能回归检测
+  - 多平台自动化构建和发布
+  - 完整的发布流程
 
 ### 核心功能 ✅
 
@@ -187,10 +201,12 @@ anytls-rs/
 │   ├── client/                  # 客户端
 │   │   ├── client.rs            # Client 核心
 │   │   ├── socks5.rs            # SOCKS5 代理
-│   │   └── session_pool.rs      # 会话复用池
+│   │   ├── session_pool.rs      # 会话复用池（v0.3.0）
+│   │   └── udp_client.rs        # UDP over TCP 客户端（v0.3.0）
 │   ├── server/                  # 服务器
 │   │   ├── server.rs            # Server 核心
-│   │   └── handler.rs           # 请求处理器
+│   │   ├── handler.rs           # TCP 请求处理器
+│   │   └── udp_proxy.rs         # UDP 代理转发（v0.3.0）
 │   └── bin/                     # 可执行文件
 │       ├── client.rs            # 客户端入口
 │       └── server.rs            # 服务器入口
@@ -291,25 +307,42 @@ RUST_LOG=debug cargo run --bin anytls-client -- -l 127.0.0.1:1080 -s 127.0.0.1:8
 ### 代码检查
 
 ```bash
-# Clippy 检查
-cargo clippy --all-targets -- -D warnings
+# Clippy 检查（所有警告视为错误）
+cargo clippy --all-targets --all-features -- -D warnings
 
 # 格式化检查
 cargo fmt --check
 
 # 代码格式化
 cargo fmt
+
+# 自动修复 Clippy 问题
+cargo clippy --fix --allow-dirty --all-targets --all-features
 ```
 
 ### 性能测试
 
 ```bash
-# 运行基准测试
+# 运行所有基准测试
 cargo bench
+
+# 运行特定基准测试
+cargo bench --bench session_bench
 
 # 查看性能报告
 open target/criterion/report/index.html  # macOS/Linux
 start target\criterion\report\index.html  # Windows
+```
+
+### CI/CD 本地验证
+
+```bash
+# 验证包元数据
+cargo package --list
+cargo package
+
+# 模拟发布（不实际上传）
+cargo publish --dry-run --allow-dirty
 ```
 
 ---
@@ -318,9 +351,11 @@ start target\criterion\report\index.html  # Windows
 
 ### 核心文档
 
+- [V0.3.0_FINAL_SUMMARY.md](docs/V0.3.0_FINAL_SUMMARY.md) - v0.3.0 完整总结
+- [ARCHITECTURE.md](docs/ARCHITECTURE.md) - 系统架构详解
+- [CI_CD_GUIDE.md](docs/CI_CD_GUIDE.md) - CI/CD 流程详解 ⭐新增
 - [TEST_SUCCESS_REPORT.md](docs/TEST_SUCCESS_REPORT.md) - 详细测试报告
 - [REFACTOR_COMPLETE_SUMMARY.md](docs/REFACTOR_COMPLETE_SUMMARY.md) - Stream 重构总结
-- [PROJECT_SUMMARY.md](docs/PROJECT_SUMMARY.md) - 项目完整总结
 
 ### 开发指南
 
@@ -328,6 +363,13 @@ start target\criterion\report\index.html  # Windows
 - [DEBUG_GUIDE.md](docs/DEBUG_GUIDE.md) - 调试指南
 - [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) - 故障排除
 - [BENCHMARK_GUIDE.md](docs/BENCHMARK_GUIDE.md) - 性能测试指南
+- [PUBLISHING.md](docs/PUBLISHING.md) - 发布指南
+
+### 功能文档
+
+- [UDP_OVER_TCP_PROTOCOL.md](docs/UDP_OVER_TCP_PROTOCOL.md) - UDP over TCP 协议
+- [UDP_OVER_TCP_USAGE.md](docs/UDP_OVER_TCP_USAGE.md) - UDP over TCP 使用指南
+- [FEATURE_COMPARISON.md](docs/FEATURE_COMPARISON.md) - 功能对比分析
 
 ### API 文档
 
@@ -375,6 +417,43 @@ curl --socks5-hostname 127.0.0.1:1080 http://httpbin.org/post -d "test=data"
 
 ---
 
+## 🚀 CI/CD
+
+项目使用 GitHub Actions 实现完整的 CI/CD 流程：
+
+### 自动化工作流
+
+- **CI Workflow** - 持续集成
+  - 多平台测试（Linux, macOS, Windows）
+  - 代码格式化检查
+  - Clippy 代码质量检查
+  - 单元测试和集成测试
+  - 安全审计（cargo audit）
+
+- **Benchmark Workflow** - 性能测试
+  - PR 时自动性能对比
+  - 性能回归检测（5% 阈值）
+  - 自动在 PR 中评论性能变化
+  - 定时运行基准测试
+
+- **Release Workflow** - 发布流程
+  - 多平台自动构建（6 个平台）
+  - 自动生成发布包和校验和
+  - 发布到 crates.io
+  - 创建 GitHub Release
+
+- **Publish Workflow** - 发布验证
+  - 发布前完整验证
+  - 自动发布到 crates.io
+
+### CI/CD 状态
+
+查看工作流状态: [GitHub Actions](https://github.com/jxo-me/anytls-rs/actions)
+
+详细说明: [CI_CD_GUIDE.md](docs/CI_CD_GUIDE.md)
+
+---
+
 ## 🔒 安全性
 
 ### 认证
@@ -401,15 +480,18 @@ curl --socks5-hostname 127.0.0.1:1080 http://httpbin.org/post -d "test=data"
 
 ### 核心依赖
 
-- **tokio** (1.36+) - 异步运行时
+- **tokio** (1.48.0) - 异步运行时
 - **rustls** (0.23) - TLS 实现
 - **tokio-rustls** (0.26) - 异步 TLS
-- **bytes** (1.5) - 高效字节缓冲
+- **bytes** (1.10.1) - 高效字节缓冲
 - **tokio-util** (0.7) - 编解码器
 - **sha2** (0.10) - SHA256 哈希
 - **md5** (0.8) - MD5 哈希
 - **tracing** (0.1) - 结构化日志
 - **thiserror** (2.0) - 错误处理
+- **anyhow** (1.0) - 错误处理工具
+- **serde** (1.0) - 序列化框架
+- **rcgen** (0.14) - 证书生成
 
 完整依赖列表: [Cargo.toml](Cargo.toml)
 
@@ -417,10 +499,19 @@ curl --socks5-hostname 127.0.0.1:1080 http://httpbin.org/post -d "test=data"
 
 ## 🚧 路线图
 
-### v0.3.0 (计划中)
+### v0.3.0 ✅ (已完成)
+
+- [x] ✅ UDP over TCP 支持（sing-box v2 协议）
+- [x] ✅ 被动心跳响应（HeartRequest/HeartResponse）
+- [x] ✅ 会话池配置增强
+- [x] ✅ SYNACK 超时检测
+- [x] ✅ Rust 2024 Edition 迁移
+- [x] ✅ CI/CD 流程完善
+
+### v0.4.0 (计划中)
 
 - [ ] HTTP 代理支持
-- [ ] UDP over TCP
+- [ ] 主动心跳检测
 - [ ] WebSocket 传输
 - [ ] 更多 padding 策略
 - [ ] 性能进一步优化
@@ -430,7 +521,7 @@ curl --socks5-hostname 127.0.0.1:1080 http://httpbin.org/post -d "test=data"
 - [ ] Windows/Linux 系统服务集成
 - [ ] GUI 客户端
 - [ ] 移动平台支持
-- [ ] 协议版本 2.0
+- [ ] 协议版本 3.0
 
 ---
 
@@ -469,18 +560,22 @@ curl --socks5-hostname 127.0.0.1:1080 http://httpbin.org/post -d "test=data"
 
 ## 📞 联系方式
 
-- 问题反馈: [GitHub Issues](https://github.com/yourusername/anytls-rs/issues)
-- 讨论: [GitHub Discussions](https://github.com/yourusername/anytls-rs/discussions)
+- 问题反馈: [GitHub Issues](https://github.com/jxo-me/anytls-rs/issues)
+- 讨论: [GitHub Discussions](https://github.com/jxo-me/anytls-rs/discussions)
+- 仓库: [jxo-me/anytls-rs](https://github.com/jxo-me/anytls-rs)
 
 ---
 
 ## 📈 项目统计
 
-- **代码行数**: ~6,000 行 Rust 代码
-- **测试覆盖**: 100% 核心功能
-- **文档**: 8 份详细文档，55,000+ 字
-- **版本**: v0.2.0
+- **代码行数**: ~8,000+ 行 Rust 代码
+- **测试覆盖**: 100% 核心功能（45/45 测试通过）
+- **文档**: 25+ 份详细文档
+- **版本**: v0.3.0
+- **Rust Edition**: 2024
 - **状态**: 生产就绪 ✅
+- **功能完整度**: 97% (vs Go 实现)
+- **CI/CD**: 完整自动化流程 ✅
 
 ---
 
@@ -488,4 +583,4 @@ curl --socks5-hostname 127.0.0.1:1080 http://httpbin.org/post -d "test=data"
 
 ---
 
-*最后更新: 2025-11-03*
+*最后更新: 2025-11-04*
