@@ -16,23 +16,84 @@ env:
 
 jobs:
   build:
-    name: Build Release
+    name: Build Release - ${{ matrix.os }} (${{ matrix.arch }})
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
         include:
+          # Linux x86_64 (GNU)
           - os: ubuntu-latest
-            artifact_name: anytls-linux
+            arch: x86_64
+            target: x86_64-unknown-linux-gnu
+            artifact_name: anytls-linux-x86_64
+            binary_ext: ""
+            archive_ext: tar.gz
+            archive_cmd: tar czf
+          
+          # Linux ARM64
+          - os: ubuntu-latest
+            arch: aarch64
+            target: aarch64-unknown-linux-gnu
+            artifact_name: anytls-linux-aarch64
+            binary_ext: ""
+            archive_ext: tar.gz
+            archive_cmd: tar czf
+          
+          # macOS x86_64 (Intel)
           - os: macos-latest
-            artifact_name: anytls-macos
+            arch: x86_64
+            target: x86_64-apple-darwin
+            artifact_name: anytls-macos-x86_64
+            binary_ext: ""
+            archive_ext: tar.gz
+            archive_cmd: tar czf
+          
+          # macOS ARM64 (Apple Silicon)
+          - os: macos-latest
+            arch: arm64
+            target: aarch64-apple-darwin
+            artifact_name: anytls-macos-arm64
+            binary_ext: ""
+            archive_ext: tar.gz
+            archive_cmd: tar czf
+          
+          # Windows x86_64
           - os: windows-latest
-            artifact_name: anytls-windows
+            arch: x86_64
+            target: x86_64-pc-windows-msvc
+            artifact_name: anytls-windows-x86_64
+            binary_ext: .exe
+            archive_ext: zip
+            archive_cmd: powershell Compress-Archive
+          
+          # Windows ARM64
+          - os: windows-latest
+            arch: arm64
+            target: aarch64-pc-windows-msvc
+            artifact_name: anytls-windows-arm64
+            binary_ext: .exe
+            archive_ext: zip
+            archive_cmd: powershell Compress-Archive
+    
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      
+      - name: Install cross-compilation dependencies (Linux)
+        if: matrix.os == 'ubuntu-latest' && matrix.arch != 'x86_64'
+        run: |
+          sudo apt-get update
+          if [ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]; then
+            sudo apt-get install -y gcc-aarch64-linux-gnu
+          fi
       
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -43,47 +104,90 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-release-
+            ${{ runner.os }}-${{ matrix.target }}-cargo-release-
       
       - name: Build release binaries
         run: |
-          cargo build --release --verbose --bin anytls-client --bin anytls-server
+          cargo build --release --verbose --target ${{ matrix.target }} --bin anytls-client --bin anytls-server
       
       - name: Create release archive
         shell: bash
         run: |
-          mkdir -p release
           VERSION=${GITHUB_REF#refs/tags/v}
           ARTIFACT_NAME="${{ matrix.artifact_name }}-${VERSION}"
-          if [ "${{ matrix.os }}" == "windows-latest" ]; then
-            cp target/release/anytls-client.exe release/anytls-client.exe
-            cp target/release/anytls-server.exe release/anytls-server.exe
+          mkdir -p release
+          
+          if [ "${{ matrix.archive_ext }}" == "zip" ]; then
+            # Windows
+            cp target/${{ matrix.target }}/release/anytls-client${{ matrix.binary_ext }} release/anytls-client${{ matrix.binary_ext }}
+            cp target/${{ matrix.target }}/release/anytls-server${{ matrix.binary_ext }} release/anytls-server${{ matrix.binary_ext }}
             cd release
             powershell Compress-Archive -Path * -DestinationPath ../${ARTIFACT_NAME}.zip
             cd ..
+            echo "ARTIFACT_PATH=${ARTIFACT_NAME}.zip" >> $GITHUB_ENV
           else
-            cp target/release/anytls-client release/anytls-client
-            cp target/release/anytls-server release/anytls-server
+            # Linux/macOS
+            cp target/${{ matrix.target }}/release/anytls-client${{ matrix.binary_ext }} release/anytls-client
+            cp target/${{ matrix.target }}/release/anytls-server${{ matrix.binary_ext }} release/anytls-server
             tar czf ${ARTIFACT_NAME}.tar.gz -C release .
+            echo "ARTIFACT_PATH=${ARTIFACT_NAME}.tar.gz" >> $GITHUB_ENV
           fi
           echo "ARTIFACT_PATH=${ARTIFACT_NAME}.*" >> $GITHUB_ENV
       
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
+          name: ${{ matrix.artifact_name }}-${{ github.ref_name }}
           path: |
             ${{ env.ARTIFACT_PATH }}
-          if-no-files-found: warn
+            ${{ env.ARTIFACT_PATH }}.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+  checksum:
+    name: Generate Release Checksums
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: anytls-*-${{ github.ref_name }}
+          merge-multiple: true
+      
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          find . -type f \( -name "*.tar.gz" -o -name "*.zip" \) ! -name "*.sha256" | while read file; do
+            if [[ "$file" == *.zip ]]; then
+              # Windows - use PowerShell if available, otherwise use certutil
+              if command -v powershell &> /dev/null; then
+                powershell -Command "(Get-FileHash $file -Algorithm SHA256).Hash | Out-File -Encoding utf8 ${file}.sha256"
+              else
+                sha256sum "$file" > "${file}.sha256"
+              fi
+            else
+              sha256sum "$file" > "${file}.sha256"
+            fi
+          done
+      
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: checksums-${{ github.ref_name }}
+          path: artifacts/*.sha256
+          retention-days: 90
 
   publish:
     name: Publish to crates.io
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
       
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -100,22 +204,37 @@ jobs:
             ~/.cargo/git/db/
             target/
           key: ubuntu-cargo-publish-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ubuntu-cargo-publish-
       
-      - name: Verify package
+      - name: Verify package metadata
         run: |
-          cargo package --verify
           cargo package --list
+          cargo package --verify
+      
+      - name: Check version matches tag
+        run: |
+          VERSION=$(grep '^version =' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          if [ "$VERSION" != "$TAG_VERSION" ]; then
+            echo "❌ Error: Cargo.toml version ($VERSION) does not match tag version ($TAG_VERSION)"
+            exit 1
+          fi
+          echo "✅ Version matches: $VERSION"
       
       - name: Publish to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
-            echo "Error: CARGO_REGISTRY_TOKEN secret is not set"
+            echo "❌ Error: CARGO_REGISTRY_TOKEN secret is not set"
             echo "Please set it in GitHub Secrets: Settings -> Secrets and variables -> Actions"
+            echo "Get token from: https://crates.io/settings/tokens"
             exit 1
           fi
+          echo "🚀 Publishing to crates.io..."
           cargo publish --verbose
+          echo "✅ Published successfully!"
 
   create-release:
     name: Create GitHub Release
@@ -123,7 +242,8 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
       
@@ -132,35 +252,113 @@ jobs:
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Version: $VERSION"
+          echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          echo "📦 Version: $VERSION"
       
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: anytls-*-${{ github.ref_name }}
+          merge-multiple: true
       
-      - name: Generate changelog
+      - name: Download checksums
+        uses: actions/download-artifact@v4
+        with:
+          path: checksums
+          pattern: checksums-*
+          merge-multiple: true
+          if-no-files-found: ignore
+      
+      - name: List artifacts
+        run: |
+          echo "📦 Artifacts to include:"
+          find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.sha256" \) | sort
+      
+      - name: Generate release notes
         id: changelog
         run: |
+          VERSION=${{ steps.get_version.outputs.version }}
+          TAG=${{ steps.get_version.outputs.tag }}
+          
+          # Create release notes
+          cat > RELEASE_NOTES.md << EOF
+          # Release $TAG
+          
+          EOF
+          
+          # Extract changelog for this version
           if [ -f docs/CHANGELOG.md ]; then
-            VERSION=${{ steps.get_version.outputs.version }}
-            # Extract changelog for this version
-            awk "/^## \[$VERSION\]/,/^## \[/" docs/CHANGELOG.md | sed '$d' > RELEASE_NOTES.md || echo "## [$VERSION] Release" > RELEASE_NOTES.md
-            if [ -s RELEASE_NOTES.md ]; then
-              echo "has_notes=true" >> $GITHUB_OUTPUT
-            else
-              echo "has_notes=false" >> $GITHUB_OUTPUT
-            fi
-          else
-            echo "has_notes=false" >> $GITHUB_OUTPUT
+            echo "📝 Extracting changelog for version $VERSION..."
+            awk "/^## \[$VERSION\]/,/^## \[/" docs/CHANGELOG.md | sed '$d' >> RELEASE_NOTES.md || true
           fi
+          
+          # Add download information
+          cat >> RELEASE_NOTES.md << EOF
+          
+          ## 📦 Downloads
+          
+          ### Pre-built Binaries
+          
+          **Linux:**
+          - \`anytls-linux-x86_64-$TAG.tar.gz\` - Linux x86_64 (Intel/AMD)
+          - \`anytls-linux-aarch64-$TAG.tar.gz\` - Linux ARM64
+          
+          **macOS:**
+          - \`anytls-macos-x86_64-$TAG.tar.gz\` - macOS Intel
+          - \`anytls-macos-arm64-$TAG.tar.gz\` - macOS Apple Silicon (M1/M2)
+          
+          **Windows:**
+          - \`anytls-windows-x86_64-$TAG.zip\` - Windows x86_64
+          - \`anytls-windows-arm64-$TAG.zip\` - Windows ARM64
+          
+          Each archive contains:
+          - \`anytls-client\` - Client binary
+          - \`anytls-server\` - Server binary
+          
+          ### Install from crates.io
+          
+          \`\`\`bash
+          cargo install anytls-rs
+          \`\`\`
+          
+          Or add to your \`Cargo.toml\`:
+          
+          \`\`\`toml
+          [dependencies]
+          anytls-rs = "$VERSION"
+          \`\`\`
+          
+          ### Verify Downloads
+          
+          SHA256 checksums are included with each release. Verify with:
+          
+          \`\`\`bash
+          # Linux/macOS
+          shasum -a 256 -c <archive>.sha256
+          
+          # Windows (PowerShell)
+          Get-FileHash <archive>.zip -Algorithm SHA256 | Compare-Object (Get-Content <archive>.zip.sha256)
+          \`\`\`
+          EOF
+          
+          echo "✅ Release notes generated"
       
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          files: artifacts/**/*
+          files: |
+            artifacts/**/*
+            checksums/**/*
           body_path: RELEASE_NOTES.md
           draft: false
           prerelease: false
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Release summary
+        run: |
+          echo "✅ GitHub Release created successfully!"
+          echo "📦 Version: ${{ steps.get_version.outputs.tag }}"
+          echo "🔗 Check: https://github.com/${{ github.repository }}/releases/tag/${{ steps.get_version.outputs.tag }}"
