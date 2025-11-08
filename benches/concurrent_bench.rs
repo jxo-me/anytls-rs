@@ -66,6 +66,7 @@ async fn create_test_session() -> Session {
         Box::new(reader) as Box<dyn AsyncRead + Send + Unpin>,
         Box::new(writer) as Box<dyn AsyncWrite + Send + Unpin>,
         padding,
+        None,
     )
 }
 

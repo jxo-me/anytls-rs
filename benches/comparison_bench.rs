@@ -137,6 +137,7 @@ fn bench_stream_creation_overhead(c: &mut Criterion) {
                     Box::new(reader) as Box<dyn AsyncRead + Send + Unpin>,
                     Box::new(writer) as Box<dyn AsyncWrite + Send + Unpin>,
                     padding,
+                    None,
                 ));
 
                 let (stream, _synack_rx) = session.open_stream().await.unwrap();
@@ -158,6 +159,7 @@ fn bench_session_startup_overhead(c: &mut Criterion) {
                     Box::new(reader) as Box<dyn AsyncRead + Send + Unpin>,
                     Box::new(writer) as Box<dyn AsyncWrite + Send + Unpin>,
                     padding,
+                    None,
                 ));
 
                 let _ = session.clone().start_client().await;
@@ -185,6 +187,7 @@ fn bench_data_frame_throughput(c: &mut Criterion) {
                             Box::new(reader) as Box<dyn AsyncRead + Send + Unpin>,
                             Box::new(writer) as Box<dyn AsyncWrite + Send + Unpin>,
                             padding,
+                            None,
                         ));
 
                         let data = Bytes::from(vec![0u8; size]);
@@ -238,6 +241,7 @@ fn bench_critical_path_operations(c: &mut Criterion) {
                     Box::new(reader) as Box<dyn AsyncRead + Send + Unpin>,
                     Box::new(writer) as Box<dyn AsyncWrite + Send + Unpin>,
                     padding,
+                    None,
                 ));
 
                 let (stream, _synack_rx) = session.open_stream().await.unwrap();

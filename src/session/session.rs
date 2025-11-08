@@ -10,6 +10,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{RwLock, mpsc};
+use tokio::time::{self, Duration, Instant, MissedTickBehavior};
+use tracing::{field, info_span};
 
 static SESSION_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 use tokio_util::codec::Decoder;
@@ -17,6 +19,18 @@ use tokio_util::codec::Decoder;
 /// Type alias for new stream callback channel
 type NewStreamCallback =
     Arc<tokio::sync::Mutex<Option<tokio::sync::mpsc::UnboundedSender<Arc<Stream>>>>>;
+
+#[derive(Clone)]
+pub struct SessionHeartbeatConfig {
+    pub interval: Duration,
+    pub timeout: Duration,
+}
+
+struct HeartbeatState {
+    interval: Duration,
+    timeout: Duration,
+    last_received: tokio::sync::Mutex<Instant>,
+}
 
 /// Session manages multiple streams over a single TLS connection
 pub struct Session {
@@ -63,17 +77,32 @@ pub struct Session {
 
     // Optional server settings to send to client
     server_settings: Option<StringMap>,
+
+    // Heartbeat configuration (client side)
+    heartbeat: Option<Arc<HeartbeatState>>,
 }
 
 impl Session {
     /// Create a new client session
-    pub fn new_client<R, W>(reader: R, writer: W, padding: Arc<PaddingFactory>) -> Self
+    pub fn new_client<R, W>(
+        reader: R,
+        writer: W,
+        padding: Arc<PaddingFactory>,
+        heartbeat: Option<SessionHeartbeatConfig>,
+    ) -> Self
     where
         R: AsyncRead + Send + Unpin + 'static,
         W: AsyncWrite + Send + Unpin + 'static,
     {
         let (stream_data_tx, stream_data_rx) = mpsc::unbounded_channel();
         let id = SESSION_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let heartbeat_state = heartbeat.map(|cfg| {
+            Arc::new(HeartbeatState {
+                interval: cfg.interval,
+                timeout: cfg.timeout,
+                last_received: tokio::sync::Mutex::new(Instant::now()),
+            })
+        });
 
         Self {
             id,
@@ -95,6 +124,7 @@ impl Session {
             buffer: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             on_new_stream: None,
             server_settings: None,
+            heartbeat: heartbeat_state,
         }
     }
 
@@ -127,6 +157,7 @@ impl Session {
             buffer: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             on_new_stream: None,
             server_settings: None,
+            heartbeat: None,
         }
     }
 
@@ -168,6 +199,15 @@ impl Session {
     /// Start the receive loop (should be run in a tokio task)
     pub async fn recv_loop(&self) -> Result<()> {
         let session_id = self.id();
+        let role = if self.is_client { "client" } else { "server" };
+        let recv_span = info_span!(
+            "anytls.session.recv",
+            session_id,
+            role = %role,
+            bytes_in = field::Empty,
+            iterations = field::Empty
+        );
+        let _recv_guard = recv_span.enter();
         tracing::info!(
             session_id = session_id,
             is_client = self.is_client,
@@ -315,6 +355,8 @@ impl Session {
             iterations = iteration,
             "[Session] recv_loop completed"
         );
+        recv_span.record("bytes_in", total_bytes_in as u64);
+        recv_span.record("iterations", iteration);
         Ok(())
     }
 
@@ -651,8 +693,10 @@ impl Session {
                     frame.stream_id
                 );
 
-                // TODO(v0.4.0): Use this for active heartbeat detection
-                // For now, just acknowledge receipt
+                if let Some(heartbeat_state) = &self.heartbeat {
+                    let mut last = heartbeat_state.last_received.lock().await;
+                    *last = Instant::now();
+                }
             }
             _ => {
                 // Unhandled command - log and ignore
@@ -1043,12 +1087,80 @@ impl Session {
             }
         });
 
+        if let Some(heartbeat_state) = self.heartbeat.as_ref().map(Arc::clone) {
+            let session = Arc::clone(&self);
+            tokio::spawn(async move {
+                let session_id = session.id();
+                let mut ticker = time::interval(heartbeat_state.interval);
+                ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
+                loop {
+                    ticker.tick().await;
+
+                    if session.is_closed() {
+                        tracing::debug!(
+                            session_id = session_id,
+                            "[Session] Heartbeat loop exiting because session is closed"
+                        );
+                        break;
+                    }
+
+                    let last_seen = {
+                        let guard = heartbeat_state.last_received.lock().await;
+                        Instant::now().saturating_duration_since(*guard)
+                    };
+
+                    if last_seen > heartbeat_state.timeout {
+                        tracing::warn!(
+                            session_id = session_id,
+                            elapsed_ms = last_seen.as_millis() as u64,
+                            "[Session] Heartbeat timeout detected; closing session"
+                        );
+                        if let Err(e) = session.close().await {
+                            tracing::error!(
+                                session_id = session_id,
+                                "[Session] Failed to close session after heartbeat timeout: {}",
+                                e
+                            );
+                        }
+                        break;
+                    }
+
+                    if let Err(e) = session
+                        .write_control_frame(Frame::control(Command::HeartRequest, 0))
+                        .await
+                    {
+                        tracing::error!(
+                            session_id = session_id,
+                            "[Session] Failed to send HeartRequest: {}",
+                            e
+                        );
+                        break;
+                    }
+
+                    tracing::trace!(
+                        session_id = session_id,
+                        "[Session] Heartbeat request sent successfully"
+                    );
+                }
+            });
+        }
+
         Ok(())
     }
 
     /// Process stream data from channels (should be run in a task)
     pub async fn process_stream_data(&self) -> Result<()> {
         let session_id = self.id();
+        let role = if self.is_client { "client" } else { "server" };
+        let process_span = info_span!(
+            "anytls.session.process_stream_data",
+            session_id,
+            role = %role,
+            bytes_out = field::Empty,
+            iterations = field::Empty
+        );
+        let _process_guard = process_span.enter();
         tracing::debug!(
             session_id = session_id,
             is_client = self.is_client,
@@ -1133,6 +1245,8 @@ impl Session {
             iterations = iteration,
             "[Session] process_stream_data completed"
         );
+        process_span.record("bytes_out", total_bytes_out as u64);
+        process_span.record("iterations", iteration);
         Ok(())
     }
 
@@ -1186,6 +1300,7 @@ mod tests {
             client_read,
             client_write,
             padding.clone(),
+            None,
         ));
 
         let server_session = Arc::new(Session::new_server(server_read, server_write, padding));
@@ -1252,6 +1367,7 @@ mod tests {
             client_read,
             client_write,
             padding.clone(),
+            None,
         ));
 
         let server_session = Arc::new(Session::new_server(server_read, server_write, padding));
@@ -1314,7 +1430,7 @@ mod tests {
 
         let padding = create_test_padding();
 
-        let session1 = Arc::new(Session::new_client(read1, write1, padding.clone()));
+        let session1 = Arc::new(Session::new_client(read1, write1, padding.clone(), None));
 
         let session2 = Arc::new(Session::new_server(read2, write2, padding));
 

@@ -20,6 +20,7 @@ async fn test_synack_success() {
         client_read,
         client_write,
         padding.clone(),
+        None,
     ));
 
     let server_session = Arc::new(Session::new_server(server_read, server_write, padding));
@@ -98,7 +99,12 @@ async fn test_synack_timeout() {
 
     let padding = PaddingFactory::default();
 
-    let client_session = Arc::new(Session::new_client(client_read, client_write, padding));
+    let client_session = Arc::new(Session::new_client(
+        client_read,
+        client_write,
+        padding,
+        None,
+    ));
 
     // Start only client recv_loop (no server to respond)
     let client_clone = client_session.clone();
@@ -150,6 +156,7 @@ async fn test_synack_error_message() {
         client_read,
         client_write,
         padding.clone(),
+        None,
     ));
 
     let server_session = Arc::new(Session::new_server(server_read, server_write, padding));

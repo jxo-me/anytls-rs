@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, interval};
+use tracing::{field, info_span};
 
 /// Configuration for session pool
 #[derive(Debug, Clone)]
@@ -145,6 +146,13 @@ impl SessionPool {
         }
 
         let initial_count = sessions.len();
+        let cleanup_span = info_span!(
+            "anytls.session_pool.cleanup",
+            idle_initial = initial_count as u64,
+            removed = field::Empty,
+            remaining = field::Empty
+        );
+        let _cleanup_guard = cleanup_span.enter();
         let mut to_remove = Vec::new();
         let mut active_count = 0;
 
@@ -188,14 +196,17 @@ impl SessionPool {
             }
         }
 
-        if !to_remove.is_empty() {
+        let removed = to_remove.len();
+        if removed > 0 {
             tracing::info!(
                 "[SessionPool] 🧹 Cleaned up {} expired sessions ({} → {} idle)",
-                to_remove.len(),
+                removed,
                 initial_count,
                 sessions.len()
             );
         }
+        cleanup_span.record("removed", removed as u64);
+        cleanup_span.record("remaining", sessions.len() as u64);
     }
 
     /// Start automatic cleanup task

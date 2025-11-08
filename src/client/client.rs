@@ -1,8 +1,8 @@
 //! AnyTLS Client implementation
 
-use crate::client::SessionPool;
+use crate::client::{SessionPool, SessionPoolConfig};
 use crate::padding::PaddingFactory;
-use crate::session::Session;
+use crate::session::{Session, SessionHeartbeatConfig};
 use crate::util::{AnyTlsError, Result, hash_password, send_authentication};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
@@ -17,6 +17,7 @@ pub struct Client {
     tls_config: Arc<tokio_rustls::TlsConnector>,
     padding: Arc<PaddingFactory>,
     session_pool: Arc<SessionPool>,
+    pool_config: SessionPoolConfig,
 }
 
 impl Client {
@@ -45,7 +46,7 @@ impl Client {
         pool_config: crate::client::SessionPoolConfig,
     ) -> Self {
         let password_hash = hash_password(password);
-        let session_pool = Arc::new(SessionPool::with_config(pool_config));
+        let session_pool = Arc::new(SessionPool::with_config(pool_config.clone()));
 
         tracing::debug!("[Client] Creating new client for server: {}", server_addr);
 
@@ -55,6 +56,7 @@ impl Client {
             tls_config,
             padding,
             session_pool,
+            pool_config,
         }
     }
 
@@ -279,7 +281,16 @@ impl Client {
         tracing::debug!("[Client] Authentication sent successfully");
 
         // Create session with reader and writer
-        let session = Arc::new(Session::new_client(reader, writer, self.padding.clone()));
+        let heartbeat_config = SessionHeartbeatConfig {
+            interval: self.pool_config.check_interval,
+            timeout: self.pool_config.idle_timeout,
+        };
+        let session = Arc::new(Session::new_client(
+            reader,
+            writer,
+            self.padding.clone(),
+            Some(heartbeat_config),
+        ));
 
         // Set sequence number for pool ordering (use timestamp-based counter)
         static SEQ_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

@@ -25,6 +25,7 @@ async fn test_heartbeat_end_to_end() {
         client_read,
         client_write,
         padding.clone(),
+        None,
     ));
 
     let server_session = Arc::new(Session::new_server(server_read, server_write, padding));
@@ -108,6 +109,7 @@ async fn test_heartbeat_stress() {
         client_read,
         client_write,
         padding.clone(),
+        None,
     ));
 
     let server_session = Arc::new(Session::new_server(server_read, server_write, padding));
@@ -172,6 +174,7 @@ async fn test_heartbeat_with_active_stream() {
         client_read,
         client_write,
         padding.clone(),
+        None,
     ));
 
     let server_session = Arc::new(Session::new_server(server_read, server_write, padding));

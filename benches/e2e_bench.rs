@@ -46,6 +46,7 @@ async fn create_connected_sessions() -> (Arc<Session>, Arc<Session>) {
         Box::new(client_read) as Box<dyn AsyncRead + Send + Unpin>,
         Box::new(client_write) as Box<dyn AsyncWrite + Send + Unpin>,
         padding.clone(),
+        None,
     ));
 
     let server_session = Arc::new(Session::new_server(

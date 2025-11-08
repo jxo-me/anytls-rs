@@ -72,17 +72,21 @@
     - fields：`session_id`（server 侧）、`peer_addr`、`tls_version`、`cipher_suite`
     - 错误字段：`error.cause`, `error.chain`
 
-  - **会话复用 / Frame 处理**（`session::recv_loop`、`Stream::write_frame`）
-    - span：`session_loop`, `frame_process`
-    - fields：`session_id`, `frame.command`, `stream_id`, `payload_len`, `bytes_in`, `bytes_out`
+- **会话复用 / Frame 处理**（`session::recv_loop`、`Session::process_stream_data`、`Stream::write_frame`）
+  - span：`anytls.session.recv`、`anytls.session.process_stream_data`、`frame_process`
+  - fields：`session_id`, `role`, `frame.command`, `stream_id`, `payload_len`, `bytes_in`, `bytes_out`, `iterations`
 
   - **心跳**（`command::HeartRequest` / `HeartResponse`）
     - span：`heartbeat`
     - fields：`session_id`, `peer_version`, `status`（success/timeout/retry）, `latency_ms`
 
-  - **FIN / 超时回收**（`Stream::close`、`Session::close_idle`）
-    - span：`stream_close`, `session_timeout`
-    - fields：`session_id`, `stream_id`, `bytes_sent`, `bytes_received`, `idle_duration`, `cause`（manual/timeout/error）
+- **FIN / 超时回收**（`Stream::close`、`Session::close_idle`、`SessionPool::cleanup_expired`）
+  - span：`stream_close`, `session_timeout`, `anytls.session_pool.cleanup`
+  - fields：`session_id`, `stream_id`, `bytes_sent`, `bytes_received`, `idle_duration`, `removed`, `remaining`, `cause`（manual/timeout/error）
+
+- **UDP-over-TCP 转发**
+  - span：`anytls.udp.proxy`
+  - fields：`stream_id`, `local_udp`, `target`, `packets_in/out`, `bytes_in/out`
 
 - **日志建议**
   - 默认级别：`RUST_LOG=info,anytls=debug`
