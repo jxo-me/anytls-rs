@@ -70,6 +70,17 @@ impl StreamHandler for TcpProxyHandler {
             // Check if this is a UDP over TCP request
             if destination.addr.contains("udp-over-tcp.arpa") {
                 tracing::info!("[Proxy] Detected UDP over TCP request");
+                if peer_version >= 2 {
+                    tracing::info!(
+                        "[Proxy] 📤 Sending SYNACK for UDP stream {} (connection established)",
+                        stream_id
+                    );
+                    let synack_frame = Frame::control(Command::SynAck, stream_id);
+                    if let Err(e) = session.write_control_frame(synack_frame).await {
+                        tracing::error!("[Proxy] Failed to send SYNACK: {}", e);
+                        return Err(e);
+                    }
+                }
                 crate::server::udp_proxy::handle_udp_over_tcp(stream).await
             } else {
                 // Regular TCP proxy

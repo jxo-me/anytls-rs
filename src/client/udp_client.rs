@@ -8,6 +8,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::UdpSocket;
+use tokio::sync::Mutex;
 
 const MAX_UDP_PACKET_SIZE: usize = 65535;
 
@@ -129,15 +130,17 @@ async fn udp_proxy_loop(local_udp: UdpSocket, stream: Arc<crate::session::Stream
 
     tracing::debug!("[UDP Client] Starting proxy loop for stream {}", stream_id);
 
+    let last_peer = Arc::new(Mutex::new(None::<SocketAddr>));
+
     // Bidirectional forwarding
     tokio::select! {
-        result = udp_to_stream(&local_udp, &stream) => {
+        result = udp_to_stream(&local_udp, &stream, last_peer.clone()) => {
             if let Err(e) = result {
                 tracing::error!("[UDP Client] UDP → Stream error: {}", e);
                 return Err(e);
             }
         }
-        result = stream_to_udp(&local_udp, &stream) => {
+        result = stream_to_udp(&local_udp, &stream, last_peer.clone()) => {
             if let Err(e) = result {
                 tracing::error!("[UDP Client] Stream → UDP error: {}", e);
                 return Err(e);
@@ -149,7 +152,11 @@ async fn udp_proxy_loop(local_udp: UdpSocket, stream: Arc<crate::session::Stream
 }
 
 /// UDP → Stream: Read from local UDP, encode and send to stream
-async fn udp_to_stream(udp: &UdpSocket, stream: &Arc<crate::session::Stream>) -> Result<()> {
+async fn udp_to_stream(
+    udp: &UdpSocket,
+    stream: &Arc<crate::session::Stream>,
+    last_peer: Arc<Mutex<Option<SocketAddr>>>,
+) -> Result<()> {
     let stream_id = stream.id();
 
     tracing::debug!(
@@ -169,6 +176,11 @@ async fn udp_to_stream(udp: &UdpSocket, stream: &Arc<crate::session::Stream>) ->
             }
         };
 
+        {
+            let mut guard = last_peer.lock().await;
+            *guard = Some(addr);
+        }
+
         tracing::trace!("[UDP Client] UDP → Stream: {} bytes from {}", len, addr);
 
         // Encode packet: Length (2 bytes) + Data
@@ -183,7 +195,11 @@ async fn udp_to_stream(udp: &UdpSocket, stream: &Arc<crate::session::Stream>) ->
 }
 
 /// Stream → UDP: Read from stream, decode and send to local UDP
-async fn stream_to_udp(udp: &UdpSocket, stream: &Arc<crate::session::Stream>) -> Result<()> {
+async fn stream_to_udp(
+    udp: &UdpSocket,
+    stream: &Arc<crate::session::Stream>,
+    last_peer: Arc<Mutex<Option<SocketAddr>>>,
+) -> Result<()> {
     let stream_id = stream.id();
     let reader = stream.reader();
 
@@ -195,8 +211,6 @@ async fn stream_to_udp(udp: &UdpSocket, stream: &Arc<crate::session::Stream>) ->
     // We need to track the peer address for sending back
     // In a real implementation, the first packet might contain address info
     // For now, we'll just send to a fixed address or handle it differently
-    let peer_addr: Option<SocketAddr> = None;
-
     loop {
         let mut reader_guard = reader.lock().await;
 
@@ -222,19 +236,10 @@ async fn stream_to_udp(udp: &UdpSocket, stream: &Arc<crate::session::Stream>) ->
 
         tracing::trace!("[UDP Client] Stream → UDP: {} bytes", payload.len());
 
-        // For client side, we need to send back to the original requester
-        // If we don't have a peer address yet, this is an error
-        // In practice, the local UDP socket should have been connected or
-        // we should track the source address from recv_from
-        if peer_addr.is_none() {
-            // Try to get the peer address from the socket
-            // This is a simplified approach - in reality we'd need to handle this better
-            tracing::warn!("[UDP Client] No peer address known, packet will be dropped");
-            continue;
-        }
+        // Determine the most recent peer address we received from
+        let target = { *last_peer.lock().await };
 
-        // Send to local UDP
-        if let Some(addr) = peer_addr {
+        if let Some(addr) = target {
             let sent = udp.send_to(&payload, addr).await?;
 
             if sent != payload.len() {
@@ -244,6 +249,11 @@ async fn stream_to_udp(udp: &UdpSocket, stream: &Arc<crate::session::Stream>) ->
                     payload.len()
                 );
             }
+        } else {
+            tracing::warn!(
+                "[UDP Client] No peer address known yet, dropping {}-byte packet",
+                payload.len()
+            );
         }
     }
 

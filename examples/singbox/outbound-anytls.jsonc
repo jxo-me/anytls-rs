@@ -1,0 +1,54 @@
+{
+  "log": {
+    "level": "info"
+  },
+  "dns": {
+    "servers": [
+      {
+        "tag": "local",
+        "type": "https",
+        "server": "1.1.1.1"
+      }
+    ]
+  },
+  "outbounds": [
+    {
+      "type": "anytls",
+      "tag": "anytls-demo",
+      "server": "127.0.0.1",
+      "server_port": 8443,
+      "password": "your_password",
+      "idle_session_check_interval": "30s",
+      "idle_session_timeout": "120s",
+      "min_idle_session": 1,
+      "tls": {
+        "enabled": true,
+        "server_name": "anytls.local",
+        "insecure": false,
+        "certificate_path": "/Users/mickey/dev/rust/anytls-rs/examples/singbox/certs/anytls.local.crt"
+      }
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "outbound": "anytls-demo",
+        "network": "tcp,udp"
+      }
+    ]
+  },
+  "inbounds": [
+    {
+      "type": "socks",
+      "tag": "socks-in",
+      "listen": "127.0.0.1",
+      "listen_port": 1080,
+      "sniff": true
+    }
+  ]
+}
+

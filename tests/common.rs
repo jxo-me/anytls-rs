@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tokio::time::{Duration, sleep};
 
 /// Test configuration
+#[allow(dead_code)]
 pub struct TestConfig {
     pub server_addr: String,
     pub client_listen: String,
@@ -27,7 +28,7 @@ pub async fn create_test_server(config: &TestConfig) -> anyhow::Result<Arc<Serve
     let tls_acceptor = Arc::new(tokio_rustls::TlsAcceptor::from(server_config));
     let padding = anytls_rs::padding::PaddingFactory::default();
 
-    let server = Arc::new(Server::new(&config.password, tls_acceptor, padding));
+    let server = Arc::new(Server::new(&config.password, tls_acceptor, padding, None));
 
     Ok(server)
 }

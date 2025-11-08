@@ -5,6 +5,7 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::server::ServerConfig;
 use rustls::{ClientConfig, RootCertStore};
 use std::sync::Arc;
+use std::{fs::File, io::BufReader, path::Path};
 
 impl From<rustls::Error> for AnyTlsError {
     fn from(err: rustls::Error) -> Self {
@@ -62,6 +63,38 @@ pub fn create_server_config() -> Result<Arc<ServerConfig>> {
     let config = ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(vec![cert], key)?;
+
+    Ok(Arc::new(config))
+}
+
+/// Create a server TLS config by loading certificate/private key from disk (PEM).
+pub fn create_server_config_from_files<P: AsRef<Path>>(
+    cert_path: P,
+    key_path: P,
+) -> Result<Arc<ServerConfig>> {
+    let cert_file = File::open(&cert_path).map_err(AnyTlsError::Io)?;
+    let mut cert_reader = BufReader::new(cert_file);
+    let certs = rustls_pemfile::certs(&mut cert_reader)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| AnyTlsError::Tls(format!("failed to parse certificate: {e}")))?;
+    if certs.is_empty() {
+        return Err(AnyTlsError::Tls(format!(
+            "no certificates found in {:?}",
+            cert_path.as_ref()
+        )));
+    }
+
+    let key_file = File::open(&key_path).map_err(AnyTlsError::Io)?;
+    let mut key_reader = BufReader::new(key_file);
+    let key = rustls_pemfile::private_key(&mut key_reader)
+        .map_err(|e| AnyTlsError::Tls(format!("failed to parse private key: {e}")))?
+        .ok_or_else(|| {
+            AnyTlsError::Tls(format!("no private key found in {:?}", key_path.as_ref()))
+        })?;
+
+    let config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)?;
 
     Ok(Arc::new(config))
 }
