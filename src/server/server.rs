@@ -126,7 +126,10 @@ async fn handle_connection(
         handshake_span.record("tls_version", field::display(format!("{:?}", protocol)));
     }
     if let Some(suite) = server_connection.negotiated_cipher_suite() {
-        handshake_span.record("cipher_suite", field::display(format!("{:?}", suite.suite())));
+        handshake_span.record(
+            "cipher_suite",
+            field::display(format!("{:?}", suite.suite())),
+        );
     }
 
     // Authenticate client
