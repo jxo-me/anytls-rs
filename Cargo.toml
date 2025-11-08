@@ -1,8 +1,8 @@
 [package]
 name = "anytls-rs"
-version = "0.3.2"
+version = "0.4.0"
 edition = "2024"
-authors = ["Mickey <mickey@jxo.me>", "AnyTLS Contributors"]
+authors = ["Mickey <mickey@jxo.me>"]
 description = "Async TLS proxy with SOCKS5 support for privacy and security."
 license = "MIT"
 repository = "https://github.com/jxo-me/anytls-rs"

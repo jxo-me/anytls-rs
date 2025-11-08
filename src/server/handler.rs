@@ -6,6 +6,7 @@ use crate::util::{AnyTlsError, Result};
 use bytes::Bytes;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -336,12 +337,15 @@ async fn proxy_tcp_connection_data_forwarding(
     // 直接克隆 Arc<Stream> 用于两个任务
     let stream_for_read = Arc::clone(&stream);
     let stream_for_write = Arc::clone(&stream);
+    let bytes_to_outbound = Arc::new(AtomicU64::new(0));
+    let bytes_to_client = Arc::new(AtomicU64::new(0));
 
     // Task 1: Stream -> Outbound（从 stream 读取，写入 outbound）
     tracing::debug!(
         "[Proxy] Spawning Task1 (stream->outbound) for stream {}",
         stream_id
     );
+    let bytes_to_outbound_clone = Arc::clone(&bytes_to_outbound);
     let task1 = tokio::spawn(async move {
         tracing::debug!("[Proxy-Task1] Task started for stream {}", stream_id);
 
@@ -392,6 +396,7 @@ async fn proxy_tcp_connection_data_forwarding(
                 tracing::error!("[Proxy-Task1] Outbound write error: {}", e);
                 break;
             }
+            bytes_to_outbound_clone.fetch_add(n as u64, Ordering::Relaxed);
 
             tracing::trace!(
                 "[Proxy-Task1] Forwarded {} bytes to outbound (iteration={})",
@@ -412,6 +417,7 @@ async fn proxy_tcp_connection_data_forwarding(
         "[Proxy] Spawning Task2 (outbound->stream) for stream {}",
         stream_id
     );
+    let bytes_to_client_clone = Arc::clone(&bytes_to_client);
     let task2 = tokio::spawn(async move {
         tracing::debug!("[Proxy-Task2] Task started for stream {}", stream_id);
         let mut buf = vec![0u8; 8192];
@@ -455,6 +461,7 @@ async fn proxy_tcp_connection_data_forwarding(
                 );
                 break;
             }
+            bytes_to_client_clone.fetch_add(n as u64, Ordering::Relaxed);
 
             tracing::trace!(
                 "[Proxy-Task2] Wrote {} bytes to stream {} (iteration={})",
@@ -477,8 +484,13 @@ async fn proxy_tcp_connection_data_forwarding(
         stream_id
     );
     let _ = tokio::join!(task1, task2);
+    let outbound_bytes = bytes_to_outbound.load(Ordering::Relaxed);
+    let client_bytes = bytes_to_client.load(Ordering::Relaxed);
 
     tracing::info!(
+        stream_id = stream_id,
+        bytes_outbound = outbound_bytes,
+        bytes_client = client_bytes,
         "[Proxy] Connection closed for stream {} to {}:{}",
         stream_id,
         destination.addr,

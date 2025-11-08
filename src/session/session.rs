@@ -176,6 +176,7 @@ impl Session {
         let mut codec = FrameCodec;
         let mut buffer = BytesMut::with_capacity(8192);
         let mut iteration = 0u64;
+        let mut total_bytes_in: usize = 0;
 
         loop {
             iteration += 1;
@@ -263,6 +264,8 @@ impl Session {
                 iteration
             );
 
+            total_bytes_in += n;
+
             // Decode frames
             let mut frame_count = 0u32;
             let buffer_before_decode = buffer.len();
@@ -305,6 +308,12 @@ impl Session {
             session_id = session_id,
             "[Session] recv_loop: Exiting after {} iterations",
             iteration
+        );
+        tracing::info!(
+            session_id = session_id,
+            bytes_in = total_bytes_in as u64,
+            iterations = iteration,
+            "[Session] recv_loop completed"
         );
         Ok(())
     }
@@ -1046,6 +1055,7 @@ impl Session {
             "[Session] process_stream_data started"
         );
         let mut iteration = 0u64;
+        let mut total_bytes_out: usize = 0;
         // Process data from streams and send as frames
         loop {
             iteration += 1;
@@ -1069,16 +1079,19 @@ impl Session {
                         );
                         break;
                     }
+                    let data_len = data.len();
                     tracing::debug!(
                         session_id = session_id,
                         "[Session] process_stream_data: Received {} bytes from stream {} (iteration {})",
-                        data.len(),
+                        data_len,
                         stream_id,
                         iteration
                     );
                     // Send data frame
-                    match self.write_data_frame(stream_id, data).await {
+                    let write_result = self.write_data_frame(stream_id, data).await;
+                    match write_result {
                         Ok(_) => {
+                            total_bytes_out += data_len;
                             tracing::debug!(
                                 session_id = session_id,
                                 "[Session] process_stream_data: Successfully wrote data frame for stream {} (iteration {})",
@@ -1113,6 +1126,12 @@ impl Session {
             session_id = session_id,
             "[Session] process_stream_data: Exiting after {} iterations",
             iteration
+        );
+        tracing::info!(
+            session_id = session_id,
+            bytes_out = total_bytes_out as u64,
+            iterations = iteration,
+            "[Session] process_stream_data completed"
         );
         Ok(())
     }

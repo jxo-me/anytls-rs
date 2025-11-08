@@ -84,7 +84,7 @@ fn bench_e2e_stream_open_and_send(c: &mut Criterion) {
 fn bench_e2e_multiple_streams_concurrent(c: &mut Criterion) {
     let mut group = c.benchmark_group("e2e_multiple_streams");
 
-    for stream_count in [1, 5, 10, 20].iter() {
+    for stream_count in [1usize, 10, 100].iter() {
         group.bench_with_input(
             BenchmarkId::new("concurrent_streams", stream_count),
             stream_count,

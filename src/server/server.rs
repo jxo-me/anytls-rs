@@ -105,6 +105,14 @@ async fn handle_connection(
         .peer_addr()
         .map(|a| a.to_string())
         .unwrap_or_else(|_| "unknown".to_string());
+    let handshake_span = info_span!(
+        "anytls.handshake",
+        peer_addr = %peer_addr,
+        session_id = field::Empty,
+        tls_version = field::Empty,
+        cipher_suite = field::Empty
+    );
+    let _handshake_guard = handshake_span.enter();
     tracing::info!("[Server] 🔌 New connection from {}", peer_addr);
     // Perform TLS handshake
     tracing::info!("[Server] 🔐 Starting TLS handshake");
@@ -113,6 +121,13 @@ async fn handle_connection(
         AnyTlsError::Tls(format!("TLS handshake failed: {}", e))
     })?;
     tracing::info!("[Server] ✅ TLS handshake successful");
+    let (_, server_connection) = tls_stream.get_ref();
+    if let Some(protocol) = server_connection.protocol_version() {
+        handshake_span.record("tls_version", field::display(format!("{:?}", protocol)));
+    }
+    if let Some(suite) = server_connection.negotiated_cipher_suite() {
+        handshake_span.record("cipher_suite", field::display(format!("{:?}", suite.suite())));
+    }
 
     // Authenticate client
     tracing::info!("[Server] 🔐 Authenticating client");
@@ -133,7 +148,8 @@ async fn handle_connection(
 
     let session = Arc::new(session);
     let session_id = session.id();
-    Span::current().record("session_id", &session_id);
+    Span::current().record("session_id", session_id);
+    handshake_span.record("session_id", field::display(session_id));
 
     tracing::info!(
         session_id = session_id,

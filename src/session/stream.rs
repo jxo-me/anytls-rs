@@ -99,6 +99,11 @@ impl Stream {
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_ok()
         {
+            tracing::warn!(
+                stream_id = self.id,
+                cause = %err,
+                "[Stream] Closing stream with error"
+            );
             *self.close_error.lock().await = Some(err);
         }
     }
