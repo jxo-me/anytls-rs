@@ -88,31 +88,43 @@ impl SessionPool {
 
     /// Get an idle session (returns the most recent one, i.e., largest seq)
     pub async fn get_idle_session(&self) -> Option<Arc<Session>> {
-        let mut sessions = self.idle_sessions.write().await;
+        loop {
+            let mut sessions = self.idle_sessions.write().await;
 
-        if sessions.is_empty() {
-            tracing::debug!("[SessionPool] No idle sessions available");
-            return None;
-        }
+            let seq = match sessions.last_key_value() {
+                Some((seq, _)) => *seq,
+                None => {
+                    tracing::debug!("[SessionPool] No idle sessions available");
+                    return None;
+                }
+            };
 
-        // Get the session with the largest seq (most recent)
-        if let Some((seq, _)) = sessions.last_key_value() {
-            let seq_clone = *seq;
-            if let Some(pooled) = sessions.remove(&seq_clone) {
+            if let Some(pooled) = sessions.remove(&seq) {
+                let idle_secs = pooled.idle_since.elapsed().as_secs_f64();
+                if pooled.session.is_closed() {
+                    tracing::debug!(
+                        "[SessionPool] Skipping closed session (seq={}, idle_for={:.1}s)",
+                        pooled.seq,
+                        idle_secs
+                    );
+                    continue;
+                }
                 tracing::info!(
                     "[SessionPool] 🔄 Reusing idle session (seq={}, idle_for={:.1}s)",
                     pooled.seq,
-                    pooled.idle_since.elapsed().as_secs_f64()
+                    idle_secs
                 );
                 return Some(pooled.session);
             }
         }
-
-        None
     }
 
     /// Add a session to the idle pool
     pub async fn add_idle_session(&self, session: Arc<Session>) {
+        if session.is_closed() {
+            tracing::debug!("[SessionPool] Session already closed, skipping add to pool");
+            return;
+        }
         let seq = session.seq();
 
         let pooled = PooledSession {
@@ -159,6 +171,11 @@ impl SessionPool {
         // Iterate from oldest to newest (ascending seq order)
         for (seq, pooled) in sessions.iter() {
             let idle_duration = now.duration_since(pooled.idle_since);
+
+            if pooled.session.is_closed() {
+                to_remove.push(*seq);
+                continue;
+            }
 
             // Keep sessions that haven't expired
             if idle_duration < self.config.idle_timeout {
@@ -243,6 +260,11 @@ impl SessionPool {
 
                 for (seq, pooled) in sessions.iter() {
                     let idle_duration = now.duration_since(pooled.idle_since);
+
+                    if pooled.session.is_closed() {
+                        to_remove.push(*seq);
+                        continue;
+                    }
 
                     if idle_duration < idle_timeout {
                         active_count += 1;

@@ -83,6 +83,24 @@ pub struct Session {
 }
 
 impl Session {
+    async fn handle_io_error(&self, context: &str, error: std::io::Error) -> AnyTlsError {
+        tracing::error!(
+            session_id = self.id(),
+            ctx = context,
+            "[Session] IO error during {}: {}",
+            context,
+            error
+        );
+        if let Err(close_err) = self.close().await {
+            tracing::warn!(
+                session_id = self.id(),
+                "[Session] Failed to close session after IO error: {}",
+                close_err
+            );
+        }
+        AnyTlsError::Io(error)
+    }
+
     /// Create a new client session
     pub fn new_client<R, W>(
         reader: R,
@@ -188,11 +206,42 @@ impl Session {
 
     /// Close the session
     pub async fn close(&self) -> Result<()> {
-        self.is_closed
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-        // Close all streams
-        let mut streams = self.streams.write().await;
-        streams.clear();
+        let already_closed = self
+            .is_closed
+            .swap(true, std::sync::atomic::Ordering::Relaxed);
+        if already_closed {
+            return Ok(());
+        }
+
+        // Close stream data receiver so process_stream_data exits
+        {
+            let mut rx = self.stream_data_rx.lock().await;
+            rx.close();
+        }
+
+        // Close all streams and notify pending waiters
+        {
+            let mut streams = self.streams.write().await;
+            let mut receive_map = self.stream_receive_tx.write().await;
+            for (stream_id, stream) in streams.drain() {
+                stream.close_with_error(AnyTlsError::SessionClosed).await;
+                stream.notify_synack(Err(AnyTlsError::SessionClosed)).await;
+                receive_map.remove(&stream_id);
+            }
+        }
+
+        // Attempt to shutdown writer gracefully
+        {
+            let mut writer = self.writer.lock().await;
+            if let Err(e) = writer.shutdown().await {
+                tracing::debug!(
+                    session_id = self.id,
+                    "[Session] Writer shutdown failed during close: {}",
+                    e
+                );
+            }
+        }
+
         Ok(())
     }
 
@@ -266,16 +315,12 @@ impl Session {
                             "[Session] recv_loop: Connection closed by peer (no close_notify) - this is normal (iteration {})",
                             iteration
                         );
+                        let _ = self.close().await;
                         break;
                     } else {
                         // This is a real error
-                        tracing::error!(
-                            session_id = session_id,
-                            "[Session] recv_loop: read_buf error: {} (iteration {})",
-                            e,
-                            iteration
-                        );
-                        return Err(AnyTlsError::Io(e));
+                        let err = self.handle_io_error("recv_loop_read", e).await;
+                        return Err(err);
                     }
                 }
             };
@@ -293,6 +338,7 @@ impl Session {
                     "[Session] recv_loop: Connection closed (read 0 bytes, iteration {})",
                     iteration
                 );
+                let _ = self.close().await;
                 break;
             }
 
@@ -877,18 +923,12 @@ impl Session {
                 buffer.len()
             );
             let mut writer = self.writer.lock().await;
-            let write_result = writer.write_all(&buffer).await;
-            tracing::trace!(
-                "[Session] write_with_padding: write_all result: {:?}",
-                write_result.as_ref().map(|_| "Ok")
-            );
-            write_result?;
-            let flush_result = writer.flush().await;
-            tracing::trace!(
-                "[Session] write_with_padding: flush result: {:?}",
-                flush_result.as_ref().map(|_| "Ok")
-            );
-            flush_result?;
+            if let Err(e) = writer.write_all(&buffer).await {
+                return Err(self.handle_io_error("write_without_padding", e).await);
+            }
+            if let Err(e) = writer.flush().await {
+                return Err(self.handle_io_error("flush_without_padding", e).await);
+            }
             tracing::info!(
                 "[Session] ✅ write_with_padding: Successfully wrote {} bytes to connection",
                 buffer.len()
@@ -911,8 +951,12 @@ impl Session {
             // Note: We should probably disable send_padding, but that requires mutable access
             // For now, just write directly
             let mut writer = self.writer.lock().await;
-            writer.write_all(&buffer).await?;
-            writer.flush().await?;
+            if let Err(e) = writer.write_all(&buffer).await {
+                return Err(self.handle_io_error("write_no_padding_stop", e).await);
+            }
+            if let Err(e) = writer.flush().await {
+                return Err(self.handle_io_error("flush_no_padding_stop", e).await);
+            }
             return Ok(());
         }
 
@@ -922,8 +966,12 @@ impl Session {
         // If no sizes defined, write directly
         if pkt_sizes.is_empty() {
             let mut writer = self.writer.lock().await;
-            writer.write_all(&buffer).await?;
-            writer.flush().await?;
+            if let Err(e) = writer.write_all(&buffer).await {
+                return Err(self.handle_io_error("write_no_padding_sizes", e).await);
+            }
+            if let Err(e) = writer.flush().await {
+                return Err(self.handle_io_error("flush_no_padding_sizes", e).await);
+            }
             return Ok(());
         }
 
@@ -964,7 +1012,9 @@ impl Session {
                         &buffer[..7]
                     );
                 }
-                writer.write_all(&buffer[..size]).await?;
+                if let Err(e) = writer.write_all(&buffer[..size]).await {
+                    return Err(self.handle_io_error("write_padding_split_payload", e).await);
+                }
                 buffer = buffer.split_off(size);
             } else if remain_payload_len > 0 {
                 // This packet contains payload + padding
@@ -983,7 +1033,9 @@ impl Session {
                     buffer.put_slice(&padding_frame);
                 }
 
-                writer.write_all(&buffer).await?;
+                if let Err(e) = writer.write_all(&buffer).await {
+                    return Err(self.handle_io_error("write_padding_payload_frame", e).await);
+                }
                 buffer.clear();
             } else {
                 // This packet is all padding
@@ -993,7 +1045,9 @@ impl Session {
                 padding_frame.put_u16(size as u16);
                 padding_frame.put_slice(&vec![0u8; size]); // padding data (zeros)
 
-                writer.write_all(&padding_frame).await?;
+                if let Err(e) = writer.write_all(&padding_frame).await {
+                    return Err(self.handle_io_error("write_padding_frame_only", e).await);
+                }
             }
         }
 
@@ -1003,21 +1057,15 @@ impl Session {
                 "[Session] write_with_padding: Writing {} remaining payload bytes",
                 buffer.len()
             );
-            let write_result = writer.write_all(&buffer).await;
-            tracing::trace!(
-                "[Session] write_with_padding: write_all result: {:?}",
-                write_result.as_ref().map(|_| "Ok")
-            );
-            write_result?;
+            if let Err(e) = writer.write_all(&buffer).await {
+                return Err(self.handle_io_error("write_remaining_payload", e).await);
+            }
         }
 
         tracing::trace!("[Session] write_with_padding: Flushing writer");
-        let flush_result = writer.flush().await;
-        tracing::trace!(
-            "[Session] write_with_padding: flush result: {:?}",
-            flush_result.as_ref().map(|_| "Ok")
-        );
-        flush_result?;
+        if let Err(e) = writer.flush().await {
+            return Err(self.handle_io_error("flush_with_padding", e).await);
+        }
         tracing::info!("[Session] ✅ write_with_padding: Successfully wrote and flushed data");
         Ok(())
     }
@@ -1135,6 +1183,13 @@ impl Session {
                             "[Session] Failed to send HeartRequest: {}",
                             e
                         );
+                        if let Err(close_err) = session.close().await {
+                            tracing::warn!(
+                                session_id = session_id,
+                                "[Session] Failed to close session after heartbeat error: {}",
+                                close_err
+                            );
+                        }
                         break;
                     }
 
