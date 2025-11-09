@@ -309,4 +309,9 @@ impl Client {
 
         Ok(session)
     }
+
+    /// Stop the background cleanup task in the session pool (primarily for tests)
+    pub async fn stop_session_pool_cleanup(&self) {
+        self.session_pool.stop_cleanup_task().await;
+    }
 }

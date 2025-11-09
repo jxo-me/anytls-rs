@@ -64,6 +64,66 @@
   - 记录 CSV：`criterion/export/{metric}_summary.csv`
   - 构建基准矩阵：列出并发数、p50/p95 延迟、吞吐、CPU 使用
 
+- **2025-11-08 基准记录（cargo bench --bench e2e_bench）**
+
+  | 场景 | p50 time | 备注 |
+  |------|----------|------|
+  | `e2e_stream_open_and_send/64` | 8.08 µs | 单条流建立 + 64B |
+  | `e2e_stream_open_and_send/16384` | 10.04 µs | 单条流建立 + 16KB |
+  | `e2e_multiple_streams/concurrent_streams/1` | 8.18 µs | 单条流复用 |
+  | `e2e_multiple_streams/concurrent_streams/10` | 34.51 µs | 10 并发流 |
+  | `e2e_multiple_streams/concurrent_streams/100` | 207.01 µs | 100 并发流 |
+  | `e2e_data_throughput/throughput/64` | 76.71 µs | 对应 ~0.83 MB/s |
+  | `e2e_data_throughput/throughput/4096` | 12.59 µs | 对应 ~325 MB/s |
+  | `e2e_session_startup_and_streams` | 11.75 µs | 会话启动 + 5 条流 |
+  | `udp_over_tcp_roundtrip/64` | 309.86 ms | 本地 UDP 回环，受 sleep/网络模拟影响 |
+
+  > 所有测试在 macOS + Rust 1.78 工具链上运行，criterion 默认 100 samples。`udp_over_tcp_roundtrip` 需手动调整采样时间（警告提示），目前基准值约 0.31s。未来可考虑缩减样本或优化测试逻辑。
+
+- **会话内部基准（cargo bench --bench session_bench）**
+
+  | 场景 | p50 time | 备注 |
+  |------|----------|------|
+  | `frame_encoding/encode/64` | 30.36 ns | Frame 编码基线 |
+  | `frame_decode/decode/64` | 1.07 µs | 解码 64B 帧 |
+  | `stream_creation` | 5.27 µs | 新建流（Mock） |
+  | `session_startup_complete` | 16.84 µs | 会话启动 + 背景任务 |
+  | `session_write_frame/write_frame/64` | 3.80 µs | 包含 write + flush |
+  | `session_control_frames/heart_request` | 3.99 µs | 心跳请求写入 |
+  | `session_multiple_streams/open_streams/20` | 50.07 µs | 连续开启 20 条流 |
+  | `padding_factory_generate_sizes` | 3.66 µs | padding 策略计算 |
+
+- **流级操作（cargo bench --bench stream_bench）**
+
+  | 场景 | p50 time | 备注 |
+  |------|----------|------|
+  | `stream_write/write/64` | 5.13 µs | `Stream::send_data` |
+  | `stream_write/write/4096` | 5.25 µs | |
+  | `stream_read/read/64` | 582 ns | `Stream::poll_read` 模拟 |
+  | `streamreader_read/read/4096` | 666 ns | `StreamReader` 独立读 |
+  | `stream_concurrent_read_write` | 52.80 µs | 读写并发压力 |
+
+- **会话池表现（cargo bench --bench session_pool_bench）**
+
+  | 场景 | p50 time | 备注 |
+  |------|----------|------|
+  | `session_pool_add_and_get/1` | 8.04 µs | 添加 + 取回 |
+  | `session_pool_add_and_get/50` | 161.85 µs | 批量 50 条 |
+  | `session_pool_concurrent_get/50pool_20gets` | 167.69 µs | 20 并发获取 |
+  | `session_pool_cleanup` | 151.84 ms | 100 sample；可调低 sample 或优化逻辑 |
+
+- **通用对比基准（cargo bench --bench comparison_bench）**
+
+  | 场景 | p50 time | 备注 |
+  |------|----------|------|
+  | `frame_encoding_strategies/encode_each_time/1024` | 96.42 ns | 实时编码 |
+  | `frame_encoding_strategies/pre_encoded_clone/1024` | 13.00 ns | 预编码复用 |
+  | `stream_creation_overhead` | 5.16 µs | |
+  | `session_startup_overhead` | 15.06 µs | |
+  | `data_frame_throughput/1024B_x1000` | 298.50 µs | ≈3.4 GB/s |
+  | `critical_path_operations/frame_encode_critical` | 105.44 ns | |
+  | `critical_path_operations/stream_send_critical` | 5.90 µs | 单次 send |
+
 ## 4. 可观测性（Observability）
 
 - **Tracing 篇**

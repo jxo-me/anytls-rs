@@ -119,6 +119,7 @@ For a responsibility-oriented overview, see `docs/00-project-radar.md`.
 | `-I, --idle-session-check-interval <SECS>` | Hint for clients (recommended check interval) |
 | `-T, --idle-session-timeout <SECS>` | Hint for idle timeout |
 | `-M, --min-idle-session <COUNT>` | Hint for minimum warm idle sessions |
+| `-V, --version` | Show version information |
 
 ### anytls-client
 
@@ -131,6 +132,7 @@ For a responsibility-oriented overview, see `docs/00-project-radar.md`.
 | `-I, --idle-session-check-interval <SECS>` | Session check interval (default 30) |
 | `-T, --idle-session-timeout <SECS>` | Idle session timeout (default 60) |
 | `-M, --min-idle-session <COUNT>` | Warm idle sessions (default 1) |
+| `-V, --version` | Show version information |
 
 Environment variable shortcuts (see `docs/01-dev-quickstart.md` and `scripts/dev-up.sh`):
 `IDLE_SESSION_CHECK_INTERVAL`, `IDLE_SESSION_TIMEOUT`, `MIN_IDLE_SESSION`, `HTTP_ADDR`, etc.

@@ -8,6 +8,9 @@ use std::sync::Arc;
 use tokio_rustls::TlsAcceptor;
 use tracing::{error, info};
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const APP_NAME: &str = "anytls-server";
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize tracing
@@ -74,6 +77,10 @@ async fn main() -> Result<()> {
                     .context("Expected value after --min-idle-session")?;
                 min_idle_session = Some(parse_usize(&value, "--min-idle-session")?);
             }
+            "-V" | "--version" => {
+                println!("{APP_NAME} {VERSION}");
+                return Ok(());
+            }
             "-h" | "--help" => {
                 println!("Usage: anytls-server [OPTIONS]");
                 println!("Options:");
@@ -89,6 +96,7 @@ async fn main() -> Result<()> {
                     "  -T, --idle-session-timeout SECS         Hint for clients (default: 60)"
                 );
                 println!("  -M, --min-idle-session COUNT            Hint for clients (default: 1)");
+                println!("  -V, --version             Show version information");
                 println!("  -h, --help                Show this help message");
                 return Ok(());
             }
@@ -130,7 +138,7 @@ async fn main() -> Result<()> {
     };
     let tls_acceptor = TlsAcceptor::from(tls_config);
 
-    info!("[Server] anytls-rs v0.1.0");
+    info!("[Server] {APP_NAME} v{VERSION}");
     info!("[Server] Listening TCP {}", listen_addr);
 
     let mut server_settings_map = StringMap::new();

@@ -143,15 +143,26 @@ jobs:
         shell: bash
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
+          if [ -z "$VERSION" ] && [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION=${{ github.event.inputs.version }}
+          fi
+          VERSION=${VERSION#v}
           ARTIFACT_NAME="${{ matrix.artifact_name }}-${VERSION}"
           mkdir -p release
+          cp LICENSE README.md README_en.md release/
+          if [ -f docs/CHANGELOG.md ]; then
+            cp docs/CHANGELOG.md release/
+          fi
+          if ls docs/RELEASE_NOTES_*.md >/dev/null 2>&1; then
+            cp docs/RELEASE_NOTES_*.md release/
+          fi
           
           if [ "${{ matrix.archive_ext }}" == "zip" ]; then
             # Windows
             cp target/${{ matrix.target }}/release/anytls-client${{ matrix.binary_ext }} release/anytls-client${{ matrix.binary_ext }}
             cp target/${{ matrix.target }}/release/anytls-server${{ matrix.binary_ext }} release/anytls-server${{ matrix.binary_ext }}
             cd release
-            powershell -Command "\$files = @('anytls-client${{ matrix.binary_ext }}', 'anytls-server${{ matrix.binary_ext }}'); Compress-Archive -Path \$files -DestinationPath '../${ARTIFACT_NAME}.zip' -Force"
+            powershell -Command "Compress-Archive -Path * -DestinationPath '../${ARTIFACT_NAME}.zip' -Force"
             cd ..
             echo "ARTIFACT_PATH=${ARTIFACT_NAME}.zip" >> $GITHUB_ENV
           else

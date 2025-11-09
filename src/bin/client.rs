@@ -9,6 +9,9 @@ use std::time::Duration;
 use tokio_rustls::TlsConnector;
 use tracing::{error, info};
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const APP_NAME: &str = "anytls-client";
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize tracing
@@ -68,6 +71,10 @@ async fn main() -> Result<()> {
                     .context("Expected value after --min-idle-session")?;
                 min_idle_sessions = Some(parse_usize(&value, "--min-idle-session")?);
             }
+            "-V" | "--version" => {
+                println!("{APP_NAME} {VERSION}");
+                return Ok(());
+            }
             "-h" | "--help" => {
                 println!("Usage: anytls-client [OPTIONS]");
                 println!("Options:");
@@ -86,6 +93,7 @@ async fn main() -> Result<()> {
                 println!(
                     "  -M, --min-idle-session COUNT            Minimum idle sessions retained (default: 1)"
                 );
+                println!("  -V, --version             Show version information");
                 println!("  -p, --password PASSWORD  Server password (required)");
                 println!("  -h, --help                Show this help message");
                 return Ok(());
@@ -119,7 +127,7 @@ async fn main() -> Result<()> {
         pool_config.min_idle_sessions = count;
     }
 
-    info!("[Client] anytls-rs v0.1.0");
+    info!("[Client] {APP_NAME} v{VERSION}");
     if let Some(http_addr) = http_listen_addr.as_ref() {
         info!(
             "[Client] SOCKS5 {} + HTTP {} => {}",

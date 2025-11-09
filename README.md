@@ -120,6 +120,7 @@ anytls-rs/
 | `-I, --idle-session-check-interval <SECS>` | 推荐给客户端的检查间隔 |
 | `-T, --idle-session-timeout <SECS>` | 推荐空闲超时 |
 | `-M, --min-idle-session <COUNT>` | 推荐保持的空闲会话数 |
+| `-V, --version` | 显示版本信息 |
 
 ### anytls-client
 
@@ -132,6 +133,7 @@ anytls-rs/
 | `-I, --idle-session-check-interval <SECS>` | 会话检查间隔（默认 30） |
 | `-T, --idle-session-timeout <SECS>` | 会话空闲超时（默认 60） |
 | `-M, --min-idle-session <COUNT>` | 预热空闲会话数（默认 1） |
+| `-V, --version` | 显示版本信息 |
 
 环境变量版本可在 `docs/01-dev-quickstart.md` 与 `scripts/dev-up.sh` 中查阅。
 
