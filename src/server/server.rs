@@ -244,6 +244,9 @@ async fn handle_connection(
                         tracing::error!("[Server] recv_loop task error: {}", e);
                     }
                 }
+                Err(AnyTlsError::SessionClosed) => {
+                    tracing::debug!("[Server] recv_loop task ended: Session closed");
+                }
                 Err(e) => {
                     tracing::error!("[Server] recv_loop task error: {}", e);
                 }

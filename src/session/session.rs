@@ -9,7 +9,7 @@ use md5;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::{Notify, RwLock, mpsc};
 use tokio::time::{self, Duration, Instant, MissedTickBehavior};
 use tracing::{field, info_span};
 
@@ -33,6 +33,8 @@ struct HeartbeatState {
 }
 
 /// Session manages multiple streams over a single TLS connection
+type StreamDataReceiver = mpsc::UnboundedReceiver<(u32, Bytes)>;
+
 pub struct Session {
     id: u64,
     // Connection reader and writer (split TLS stream)
@@ -45,7 +47,7 @@ pub struct Session {
 
     // Channel for receiving data from streams
     stream_data_tx: mpsc::UnboundedSender<(u32, Bytes)>,
-    stream_data_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<(u32, Bytes)>>>,
+    stream_data_rx: Arc<tokio::sync::Mutex<Option<StreamDataReceiver>>>,
 
     // Channel for sending data to streams (stream_id -> sender)
     stream_receive_tx: Arc<RwLock<HashMap<u32, mpsc::UnboundedSender<Bytes>>>>,
@@ -80,6 +82,7 @@ pub struct Session {
 
     // Heartbeat configuration (client side)
     heartbeat: Option<Arc<HeartbeatState>>,
+    close_notify: Arc<Notify>,
 }
 
 impl Session {
@@ -129,7 +132,7 @@ impl Session {
             streams: Arc::new(RwLock::new(HashMap::new())),
             stream_id: Arc::new(std::sync::atomic::AtomicU32::new(1)),
             stream_data_tx,
-            stream_data_rx: Arc::new(tokio::sync::Mutex::new(stream_data_rx)),
+            stream_data_rx: Arc::new(tokio::sync::Mutex::new(Some(stream_data_rx))),
             stream_receive_tx: Arc::new(RwLock::new(HashMap::new())),
             is_closed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             padding: Arc::new(RwLock::new(padding)),
@@ -143,6 +146,7 @@ impl Session {
             on_new_stream: None,
             server_settings: None,
             heartbeat: heartbeat_state,
+            close_notify: Arc::new(Notify::new()),
         }
     }
 
@@ -162,7 +166,7 @@ impl Session {
             streams: Arc::new(RwLock::new(HashMap::new())),
             stream_id: Arc::new(std::sync::atomic::AtomicU32::new(1)),
             stream_data_tx,
-            stream_data_rx: Arc::new(tokio::sync::Mutex::new(stream_data_rx)),
+            stream_data_rx: Arc::new(tokio::sync::Mutex::new(Some(stream_data_rx))),
             stream_receive_tx: Arc::new(RwLock::new(HashMap::new())),
             is_closed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             padding: Arc::new(RwLock::new(padding)),
@@ -176,6 +180,7 @@ impl Session {
             on_new_stream: None,
             server_settings: None,
             heartbeat: None,
+            close_notify: Arc::new(Notify::new()),
         }
     }
 
@@ -212,13 +217,9 @@ impl Session {
         if already_closed {
             return Ok(());
         }
+        self.close_notify.notify_waiters();
 
         // Close stream data receiver so process_stream_data exits
-        {
-            let mut rx = self.stream_data_rx.lock().await;
-            rx.close();
-        }
-
         // Close all streams and notify pending waiters
         {
             let mut streams = self.streams.write().await;
@@ -233,12 +234,21 @@ impl Session {
         // Attempt to shutdown writer gracefully
         {
             let mut writer = self.writer.lock().await;
-            if let Err(e) = writer.shutdown().await {
-                tracing::debug!(
-                    session_id = self.id,
-                    "[Session] Writer shutdown failed during close: {}",
-                    e
-                );
+            match time::timeout(Duration::from_secs(1), writer.shutdown()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    tracing::debug!(
+                        session_id = self.id,
+                        "[Session] Writer shutdown failed during close: {}",
+                        e
+                    );
+                }
+                Err(_) => {
+                    tracing::debug!(
+                        session_id = self.id,
+                        "[Session] Writer shutdown timed out during close"
+                    );
+                }
             }
         }
 
@@ -275,7 +285,7 @@ impl Session {
                     "[Session] recv_loop: Session closed (iteration {})",
                     iteration
                 );
-                return Err(AnyTlsError::SessionClosed);
+                break;
             }
 
             // Read data from connection
@@ -1115,6 +1125,9 @@ impl Session {
                         tracing::error!("[Session] recv_loop task error: {}", e);
                     }
                 }
+                Err(AnyTlsError::SessionClosed) => {
+                    tracing::debug!("[Session] recv_loop task ended: Session closed");
+                }
                 Err(e) => {
                     tracing::error!("[Session] recv_loop task error: {}", e);
                 }
@@ -1223,6 +1236,19 @@ impl Session {
         );
         let mut iteration = 0u64;
         let mut total_bytes_out: usize = 0;
+        let close_notify = Arc::clone(&self.close_notify);
+        let receiver = {
+            let mut guard = self.stream_data_rx.lock().await;
+            guard.take()
+        };
+
+        let Some(mut receiver) = receiver else {
+            tracing::debug!(
+                session_id = session_id,
+                "[Session] process_stream_data: Receiver already taken, nothing to process"
+            );
+            return Ok(());
+        };
         // Process data from streams and send as frames
         loop {
             iteration += 1;
@@ -1231,9 +1257,17 @@ impl Session {
                 "[Session] process_stream_data: Waiting for data from streams (iteration {})",
                 iteration
             );
-            let result = {
-                let mut receiver = self.stream_data_rx.lock().await;
-                receiver.recv().await
+            let result = tokio::select! {
+                biased;
+                _ = close_notify.notified() => {
+                    tracing::debug!(
+                        session_id = session_id,
+                        "[Session] process_stream_data: Received close notification (iteration {})",
+                        iteration
+                    );
+                    break;
+                }
+                result = receiver.recv() => result,
             };
 
             match result {
