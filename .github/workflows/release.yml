@@ -148,32 +148,32 @@ jobs:
           fi
           VERSION=${VERSION#v}
           ARTIFACT_NAME="${{ matrix.artifact_name }}-${VERSION}"
-          mkdir -p release
-          cp LICENSE README.md README_en.md release/
+          ARTIFACT_DIR="release"
+          mkdir -p "${ARTIFACT_DIR}"
+          cp LICENSE README.md README.en.md "${ARTIFACT_DIR}/"
           if [ -f docs/CHANGELOG.md ]; then
-            cp docs/CHANGELOG.md release/
+            cp docs/CHANGELOG.md "${ARTIFACT_DIR}/"
           fi
           if ls docs/RELEASE_NOTES_*.md >/dev/null 2>&1; then
-            cp docs/RELEASE_NOTES_*.md release/
+            cp docs/RELEASE_NOTES_*.md "${ARTIFACT_DIR}/"
           fi
           
           if [ "${{ matrix.archive_ext }}" == "zip" ]; then
             # Windows
-            cp target/${{ matrix.target }}/release/anytls-client${{ matrix.binary_ext }} release/anytls-client${{ matrix.binary_ext }}
-            cp target/${{ matrix.target }}/release/anytls-server${{ matrix.binary_ext }} release/anytls-server${{ matrix.binary_ext }}
-            cd release
+            cp "target/${{ matrix.target }}/release/anytls-client${{ matrix.binary_ext }}" "${ARTIFACT_DIR}/anytls-client${{ matrix.binary_ext }}"
+            cp "target/${{ matrix.target }}/release/anytls-server${{ matrix.binary_ext }}" "${ARTIFACT_DIR}/anytls-server${{ matrix.binary_ext }}"
+            cd "${ARTIFACT_DIR}"
             powershell -Command "Compress-Archive -Path * -DestinationPath '../${ARTIFACT_NAME}.zip' -Force"
             cd ..
-            echo "ARTIFACT_PATH=${ARTIFACT_NAME}.zip" >> $GITHUB_ENV
+            ARTIFACT_PATH="${ARTIFACT_NAME}.zip"
           else
             # Linux/macOS
-            cp target/${{ matrix.target }}/release/anytls-client${{ matrix.binary_ext }} release/anytls-client
-            cp target/${{ matrix.target }}/release/anytls-server${{ matrix.binary_ext }} release/anytls-server
-            tar czf ${ARTIFACT_NAME}.tar.gz -C release .
-            echo "ARTIFACT_PATH=${ARTIFACT_NAME}.tar.gz" >> $GITHUB_ENV
+            cp "target/${{ matrix.target }}/release/anytls-client${{ matrix.binary_ext }}" "${ARTIFACT_DIR}/anytls-client"
+            cp "target/${{ matrix.target }}/release/anytls-server${{ matrix.binary_ext }}" "${ARTIFACT_DIR}/anytls-server"
+            ARTIFACT_PATH="${ARTIFACT_NAME}.tar.gz"
+            tar czf "${ARTIFACT_PATH}" -C "${ARTIFACT_DIR}" .
           fi
-          
-          echo "ARTIFACT_PATH=${ARTIFACT_NAME}.*" >> $GITHUB_ENV
+          echo "ARTIFACT_PATH=${ARTIFACT_PATH}" >> $GITHUB_ENV
       
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -181,7 +181,6 @@ jobs:
           name: ${{ matrix.artifact_name }}-${{ github.ref_name }}
           path: |
             ${{ env.ARTIFACT_PATH }}
-            ${{ env.ARTIFACT_PATH }}.sha256
           if-no-files-found: error
           retention-days: 90
 

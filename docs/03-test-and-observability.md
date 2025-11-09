@@ -29,11 +29,11 @@
 
 ## 2. 集成测试（Integration Tests）
 
-- **本地 Server ↔ Client 回环（TCP + SOCKS5）**
-  - `tests/tcp_roundtrip.rs`：启动本地 HTTP upstream，通过 AnyTLS + SOCKS5 完成 HTTP GET
+- **基础代理连通性（SOCKS5）**
+  - `tests/basic_proxy.rs`：使用随机端口与内建 TCP echo server，同步验证 server ↔ client ↔ upstream 全链路
   - 命令：
     ```bash
-    cargo test --test tcp_roundtrip -- --nocapture
+    cargo test --test basic_proxy -- --nocapture
     ```
 
 - **UDP-over-TCP 回环**
@@ -143,6 +143,7 @@
 - **FIN / 超时回收**（`Stream::close`、`Session::close_idle`、`SessionPool::cleanup_expired`）
   - span：`stream_close`, `session_timeout`, `anytls.session_pool.cleanup`
   - fields：`session_id`, `stream_id`, `bytes_sent`, `bytes_received`, `idle_duration`, `removed`, `remaining`, `cause`（manual/timeout/error）
+  - 说明：自 0.4.1 起 `Session::close` 会广播 `close_notify` 并为 writer shutdown 设置 1s 超时，相关日志降级为 `debug`，方便排查但不会干扰测试
 
 - **UDP-over-TCP 转发**
   - span：`anytls.udp.proxy`

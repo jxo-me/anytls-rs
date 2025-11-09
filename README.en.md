@@ -1,6 +1,6 @@
 # AnyTLS-RS
 
-[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](https://github.com/jxo-me/anytls-rs)
+[![Version](https://img.shields.io/badge/version-0.4.1-blue.svg)](https://github.com/jxo-me/anytls-rs)
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
 [![Edition](https://img.shields.io/badge/edition-2024-blue.svg)](https://doc.rust-lang.org/edition-guide/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -142,7 +142,7 @@ Environment variable shortcuts (see `docs/01-dev-quickstart.md` and `scripts/dev
 ## ✅ Testing & Benchmarks
 
 - Unit tests: frame codec, padding, error mapping, consistency assertions
-- Integration tests: SOCKS5 + HTTP proxy, UDP-over-TCP loopback (`tests/udp_roundtrip.rs`)
+- Integration tests: built-in echo loopback for SOCKS5 (`tests/basic_proxy.rs`), UDP-over-TCP loopback (`tests/udp_roundtrip.rs`)
 - Benchmarks: session reuse concurrency (1/10/100 streams), p50/p95 latency, throughput
 - Smoke automation: `./scripts/dev-verify.sh`
 

@@ -1,6 +1,6 @@
 # AnyTLS-RS
 
-[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](https://github.com/jxo-me/anytls-rs)
+[![Version](https://img.shields.io/badge/version-0.4.1-blue.svg)](https://github.com/jxo-me/anytls-rs)
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
 [![Edition](https://img.shields.io/badge/edition-2024-blue.svg)](https://doc.rust-lang.org/edition-guide/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -142,7 +142,7 @@ anytls-rs/
 ## ✅ 测试与基准
 
 - 单测：帧编解码、padding、错误映射等
-- 集成测试：`tests/udp_roundtrip.rs`（UDP-over-TCP 回环）、SOCKS5/HTTP 代理本地验证
+- 集成测试：`tests/basic_proxy.rs`（内建 echo server 验证 SOCKS5 通路）、`tests/udp_roundtrip.rs`（UDP-over-TCP 回环）
 - 基准：`cargo bench`，包含会话并发、吞吐、UDP-over-TCP 延迟
 - 自动化：`./scripts/dev-verify.sh` 会执行最短验证流程，便于回归
 
