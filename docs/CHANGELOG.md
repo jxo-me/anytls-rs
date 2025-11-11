@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file. Dates use `YYYY-MM-DD`.
 
+## [0.5.1] - 2025-11-11
+
+### Fixed
+- Windows build compatibility: Added conditional compilation for Unix-only signal handling
+  - `tokio::signal::unix` imports now restricted to Unix platforms with `#[cfg(unix)]`
+  - SIGHUP signal handler only compiled on Unix-like systems (Linux, macOS)
+  - Windows users are notified to use `--watch-cert` for automatic certificate reload
+  - Help text for SIGHUP signal now only displayed on Unix platforms
+
 ## [0.5.0] - 2025-11-11
 
 ### Added
