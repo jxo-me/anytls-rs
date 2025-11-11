@@ -453,9 +453,9 @@ impl Session {
                     );
                     match tx.send(frame.data.clone()) {
                         Ok(_) => {
-                            tracing::info!(
+                            tracing::debug!(
                                 session_id = session_id,
-                                "[Session] ✅ handle_frame: Successfully sent {} bytes to stream {} via channel",
+                                "[Session] handle_frame: Successfully sent {} bytes to stream {} via channel",
                                 data_len,
                                 frame.stream_id
                             );
@@ -556,9 +556,9 @@ impl Session {
             Command::SynAck => {
                 // Server acknowledges stream open (client side)
                 if self.is_client {
-                    tracing::info!(
+                    tracing::debug!(
                         session_id = session_id,
-                        "[Session] ✅ Received SYNACK for stream {}",
+                        "[Session] Received SYNACK for stream {}",
                         frame.stream_id
                     );
 
@@ -581,7 +581,7 @@ impl Session {
                         } else {
                             tracing::info!(
                                 session_id = session_id,
-                                "[Session] ✅ Stream {} SYNACK received (success) - stream is ready",
+                                "[Session] Stream {} SYNACK received (success) - stream is ready",
                                 frame.stream_id
                             );
                             // Notify stream about success
@@ -725,7 +725,7 @@ impl Session {
             Command::HeartRequest => {
                 // Heartbeat request - respond with HeartResponse
                 tracing::debug!(
-                    "[Session] 💓 Received HeartRequest (stream_id={})",
+                    "[Session] Received HeartRequest (stream_id={})",
                     frame.stream_id
                 );
 
@@ -733,19 +733,19 @@ impl Session {
                 let response = Frame::control(Command::HeartResponse, frame.stream_id);
 
                 if let Err(e) = self.write_control_frame(response).await {
-                    tracing::error!("[Session] ❌ Failed to send HeartResponse: {}", e);
+                    tracing::error!("[Session] Failed to send HeartResponse: {}", e);
                     return Err(e);
                 }
 
                 tracing::debug!(
-                    "[Session] ✅ Sent HeartResponse (stream_id={})",
+                    "[Session] Sent HeartResponse (stream_id={})",
                     frame.stream_id
                 );
             }
             Command::HeartResponse => {
                 // Heartbeat response - log for now
                 tracing::debug!(
-                    "[Session] 💚 Received HeartResponse (stream_id={})",
+                    "[Session] Received HeartResponse (stream_id={})",
                     frame.stream_id
                 );
 
@@ -757,7 +757,7 @@ impl Session {
             _ => {
                 // Unhandled command - log and ignore
                 tracing::debug!(
-                    "[Session] ⚠️ Unhandled command: {:?} (stream_id={})",
+                    "[Session] Unhandled command: {:?} (stream_id={})",
                     frame.cmd,
                     frame.stream_id
                 );
@@ -869,8 +869,8 @@ impl Session {
             let mut buf = self.buffer.lock().await;
             let old_len = buf.len();
             buf.extend_from_slice(&buffer);
-            tracing::info!(
-                "[Session] 📦 write_frame: Buffered frame (buffer size: {} -> {})",
+            tracing::debug!(
+                "[Session] write_frame: Buffered frame (buffer size: {} -> {})",
                 old_len,
                 buf.len()
             );
@@ -882,16 +882,16 @@ impl Session {
             let mut buf = self.buffer.lock().await;
             if !buf.is_empty() {
                 let buffered_len = buf.len();
-                tracing::info!(
-                    "[Session] 🚀 write_frame: Flushing {} buffered bytes along with new frame ({} bytes)",
+                tracing::debug!(
+                    "[Session] write_frame: Flushing {} buffered bytes along with new frame ({} bytes)",
                     buffered_len,
                     buffer.len()
                 );
 
                 // Log first frame's header for debugging
                 if buffered_len >= 7 {
-                    tracing::info!(
-                        "[Session] 🔍 First buffered frame header: cmd={}, stream_id={:?}, data_len={:?}",
+                    tracing::debug!(
+                        "[Session] First buffered frame header: cmd={}, stream_id={:?}, data_len={:?}",
                         buf[0],
                         u32::from_be_bytes([buf[1], buf[2], buf[3], buf[4]]),
                         u16::from_be_bytes([buf[5], buf[6]])
@@ -908,7 +908,7 @@ impl Session {
         // Log what we're about to send
         if buffer.len() >= 7 {
             tracing::info!(
-                "[Session] 🔍 About to send frame header: cmd={}, stream_id={:?}, data_len={:?}, total_buffer_len={}",
+                "[Session] About to send frame header: cmd={}, stream_id={:?}, data_len={:?}, total_buffer_len={}",
                 buffer[0],
                 u32::from_be_bytes([buffer[1], buffer[2], buffer[3], buffer[4]]),
                 u16::from_be_bytes([buffer[5], buffer[6]]),
@@ -940,7 +940,7 @@ impl Session {
                 return Err(self.handle_io_error("flush_without_padding", e).await);
             }
             tracing::info!(
-                "[Session] ✅ write_with_padding: Successfully wrote {} bytes to connection",
+                "[Session] write_with_padding: Successfully wrote {} bytes to connection",
                 buffer.len()
             );
             return Ok(());
@@ -1011,13 +1011,13 @@ impl Session {
                 // This packet is all payload - send exactly size bytes
                 // Note: This may split a frame in the middle, but that's okay for TLS records
                 // The receiver will reassemble frames from the stream
-                tracing::info!(
-                    "[Session] write_with_padding: ⚠️ Splitting payload: sending {} bytes (remain={})",
+                tracing::debug!(
+                    "[Session] write_with_padding: Splitting payload: sending {} bytes (remain={})",
                     size,
                     remain_payload_len
                 );
                 if size >= 7 {
-                    tracing::info!(
+                    tracing::debug!(
                         "[Session] write_with_padding: First 7 bytes being sent: {:?}",
                         &buffer[..7]
                     );

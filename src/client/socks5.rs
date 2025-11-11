@@ -86,22 +86,22 @@ async fn handle_socks5_connection(
     client: Arc<Client>,
 ) -> Result<()> {
     // Step 1: Authentication negotiation
-    tracing::info!("[SOCKS5] 🔐 Starting authentication negotiation");
+    tracing::debug!("[SOCKS5] Starting authentication negotiation");
     authenticate(&mut client_conn).await?;
-    tracing::info!("[SOCKS5] ✅ Authentication completed");
+    tracing::debug!("[SOCKS5] Authentication completed");
 
     // Step 2: Read connection request
-    tracing::info!("[SOCKS5] 📖 Reading connection request");
+    tracing::debug!("[SOCKS5] Reading connection request");
     let (dest_addr, _cmd) = read_connection_request(&mut client_conn).await?;
-    tracing::info!(
-        "[SOCKS5] ✅ Connection request: {}:{}",
+    tracing::debug!(
+        "[SOCKS5] Connection request: {}:{}",
         dest_addr.addr,
         dest_addr.port
     );
 
     // Step 3: Create proxy connection through AnyTLS
-    tracing::info!(
-        "[SOCKS5] 🔗 Creating proxy stream to {}:{}",
+    tracing::debug!(
+        "[SOCKS5] Creating proxy stream to {}:{}",
         dest_addr.addr,
         dest_addr.port
     );
@@ -110,13 +110,13 @@ async fn handle_socks5_connection(
         .await
     {
         Ok((stream, sess)) => {
-            tracing::info!(
-                "[SOCKS5] ✅ Proxy stream created successfully for {}:{}, stream_id={}",
+            tracing::debug!(
+                "[SOCKS5] Proxy stream created successfully for {}:{}, stream_id={}",
                 dest_addr.addr,
                 dest_addr.port,
                 stream.id()
             );
-            tracing::info!("[SOCKS5] 📊 Session status: closed={}", sess.is_closed());
+            tracing::debug!("[SOCKS5] Session status: closed={}", sess.is_closed());
             (stream, sess)
         }
         Err(e) => {
@@ -147,13 +147,13 @@ async fn handle_socks5_connection(
     let stream_id = proxy_stream.id();
 
     // Step 4: Send success reply
-    tracing::info!("[SOCKS5] 📤 Sending success reply to client");
+    tracing::debug!("[SOCKS5] Sending success reply to client");
     send_connection_reply(&mut client_conn, REPLY_SUCCEEDED, dest_addr.clone()).await?;
-    tracing::info!("[SOCKS5] ✅ Success reply sent");
+    tracing::debug!("[SOCKS5] Success reply sent");
 
     // Step 5: Bidirectional data forwarding
-    tracing::info!(
-        "[SOCKS5] 🚀 Starting bidirectional data forwarding for stream {}",
+    tracing::debug!(
+        "[SOCKS5] Starting bidirectional data forwarding for stream {}",
         stream_id
     );
     tracing::debug!(
@@ -326,12 +326,12 @@ async fn handle_socks5_connection(
         );
     });
 
-    tracing::info!(
+    tracing::debug!(
         "[SOCKS5] Tasks spawned, waiting for completion (stream {})",
         stream_id
     );
     let (result1, result2) = tokio::join!(task1, task2);
-    tracing::info!("[SOCKS5] Both tasks completed for stream {}", stream_id);
+    tracing::debug!("[SOCKS5] Both tasks completed for stream {}", stream_id);
     if let Err(e) = result1 {
         tracing::error!("[SOCKS5] Task1 error: {:?}", e);
     }
@@ -339,7 +339,7 @@ async fn handle_socks5_connection(
         tracing::error!("[SOCKS5] Task2 error: {:?}", e);
     }
 
-    tracing::info!(
+    tracing::debug!(
         "[SOCKS5] Connection to {}:{} closed",
         dest_addr.addr,
         dest_addr.port

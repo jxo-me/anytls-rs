@@ -55,10 +55,7 @@ pub async fn handle_udp_over_tcp(stream: Arc<Stream>) -> Result<()> {
     );
     let _udp_guard = udp_span.enter();
 
-    tracing::info!(
-        "[UDP] 🔵 Starting UDP over TCP proxy for stream {}",
-        stream_id
-    );
+    tracing::debug!("[UDP] Starting UDP over TCP proxy for stream {}", stream_id);
 
     let reader = stream.reader();
     let mut reader_guard = reader.lock().await;
@@ -74,7 +71,7 @@ pub async fn handle_udp_over_tcp(stream: Arc<Stream>) -> Result<()> {
     };
     udp_span.record("target", field::display(target_addr));
 
-    tracing::info!("[UDP] Target UDP address: {}", target_addr);
+    tracing::debug!("[UDP] Target UDP address: {}", target_addr);
 
     drop(reader_guard);
 
@@ -85,7 +82,7 @@ pub async fn handle_udp_over_tcp(stream: Arc<Stream>) -> Result<()> {
     })?;
 
     let local_addr = udp_socket.local_addr()?;
-    tracing::info!("[UDP] Created UDP socket on {}", local_addr);
+    tracing::debug!("[UDP] Created UDP socket on {}", local_addr);
     udp_span.record("local_udp", field::display(local_addr));
 
     let packets_stream_to_udp = Arc::new(AtomicU64::new(0));
@@ -133,7 +130,7 @@ pub async fn handle_udp_over_tcp(stream: Arc<Stream>) -> Result<()> {
     udp_span.record("packets_in", packets_in);
     udp_span.record("bytes_in", bytes_in);
 
-    tracing::info!(
+    tracing::debug!(
         "[UDP] UDP over TCP proxy completed for stream {} (packets_out={}, packets_in={})",
         stream_id,
         packets_out,

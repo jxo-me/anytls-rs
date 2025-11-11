@@ -219,7 +219,7 @@ impl AsyncWrite for Stream {
             }
             Err(e) => {
                 tracing::error!(
-                    "[Stream] poll_write: ❌ Failed to send {} bytes to channel for stream {}: {:?}",
+                    "[Stream] poll_write: Failed to send {} bytes to channel for stream {}: {:?}",
                     buf_len,
                     stream_id,
                     e

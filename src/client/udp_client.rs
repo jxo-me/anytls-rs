@@ -32,7 +32,7 @@ impl Client {
         local_addr: &str,
         target_addr: SocketAddr,
     ) -> Result<SocketAddr> {
-        tracing::info!(
+        tracing::debug!(
             "[UDP Client] Creating UDP over TCP proxy: local={}, target={}",
             local_addr,
             target_addr
@@ -42,7 +42,7 @@ impl Client {
         let magic_destination = (UDP_OVER_TCP_MAGIC_ADDR.to_string(), 0);
         let (stream, _session) = self.create_proxy_stream(magic_destination).await?;
 
-        tracing::info!(
+        tracing::debug!(
             "[UDP Client] Created stream {} for UDP over TCP",
             stream.id()
         );
@@ -61,7 +61,7 @@ impl Client {
             .send_data(initial_request)
             .map_err(|e| AnyTlsError::Protocol(format!("Failed to send initial request: {}", e)))?;
 
-        tracing::info!(
+        tracing::debug!(
             "[UDP Client] Initial request sent to stream {}",
             stream.id()
         );
@@ -73,7 +73,7 @@ impl Client {
         })?;
 
         let bound_addr = local_udp.local_addr()?;
-        tracing::info!("[UDP Client] Local UDP socket bound to {}", bound_addr);
+        tracing::debug!("[UDP Client] Local UDP socket bound to {}", bound_addr);
 
         // Step 4: Start bidirectional forwarding
         let stream_clone = stream.clone();
@@ -84,7 +84,7 @@ impl Client {
             }
         });
 
-        tracing::info!(
+        tracing::debug!(
             "[UDP Client] UDP proxy started: {} <-> {}",
             bound_addr,
             target_addr

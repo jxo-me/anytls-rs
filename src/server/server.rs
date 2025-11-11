@@ -154,7 +154,7 @@ async fn handle_connection(
     tracing::debug!("[Server] Authenticating client");
     let (mut reader, writer) = tokio::io::split(tls_stream);
     authenticate_client(&mut reader, &password_hash, &padding).await?;
-    tracing::info!("[Server] Client authenticated");
+    tracing::debug!("[Server] Client authenticated");
 
     // Create callback channel for new streams
     let (stream_callback_tx, mut stream_callback_rx) =

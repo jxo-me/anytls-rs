@@ -109,8 +109,8 @@ impl SessionPool {
                     );
                     continue;
                 }
-                tracing::info!(
-                    "[SessionPool] 🔄 Reusing idle session (seq={}, idle_for={:.1}s)",
+                tracing::debug!(
+                    "[SessionPool] Reusing idle session (seq={}, idle_for={:.1}s)",
                     pooled.seq,
                     idle_secs
                 );
@@ -215,8 +215,8 @@ impl SessionPool {
 
         let removed = to_remove.len();
         if removed > 0 {
-            tracing::info!(
-                "[SessionPool] 🧹 Cleaned up {} expired sessions ({} → {} idle)",
+            tracing::debug!(
+                "[SessionPool] Cleaned up {} expired sessions ({} -> {} idle)",
                 removed,
                 initial_count,
                 sessions.len()
@@ -237,8 +237,8 @@ impl SessionPool {
         let handle = tokio::spawn(async move {
             let mut interval_timer = interval(check_interval);
 
-            tracing::info!(
-                "[SessionPool] 🔄 Cleanup task started (interval={:?}, timeout={:?}, min_idle={})",
+            tracing::debug!(
+                "[SessionPool] Cleanup task started (interval={:?}, timeout={:?}, min_idle={})",
                 check_interval,
                 idle_timeout,
                 min_idle
@@ -288,8 +288,8 @@ impl SessionPool {
                         }
                     }
 
-                    tracing::info!(
-                        "[SessionPool] 🧹 Auto-cleanup: removed {} expired sessions",
+                    tracing::debug!(
+                        "[SessionPool] Auto-cleanup: removed {} expired sessions",
                         to_remove.len()
                     );
                 }
@@ -307,7 +307,7 @@ impl SessionPool {
         let mut task_guard = self.cleanup_task.lock().await;
         if let Some(handle) = task_guard.take() {
             handle.abort();
-            tracing::info!("[SessionPool] ⏹️ Cleanup task stopped");
+            tracing::debug!("[SessionPool] Cleanup task stopped");
         }
     }
 }

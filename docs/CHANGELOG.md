@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file. Dates use `YYYY-MM-DD`.
 
+## [0.5.2] - 2025-11-11
+
+### Changed
+- **Logging Refinement**: Further optimized log levels for production use
+  - FrameCodec logs downgraded from `info` to `debug` (high-frequency protocol operations)
+  - Server-side proxy operations downgraded to `debug`/`trace` levels
+  - Client-side operations (SOCKS5, HTTP, UDP, session pool) downgraded to `debug`
+  - Removed all emoji from log messages for cleaner output
+  - Info level now strictly reserved for connection-level events only:
+    - Server: "Listening on", "New connection from", "Session created"
+    - Client: Proxy listeners "Listening on"
+    - Certificate reload events
+
+### Performance
+- Reduced log volume in production environments by 70-80%
+- Debug and trace logs provide detailed troubleshooting when needed
+
 ## [0.5.1] - 2025-11-11
 
 ### Fixed

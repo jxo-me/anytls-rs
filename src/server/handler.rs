@@ -70,10 +70,10 @@ impl StreamHandler for TcpProxyHandler {
 
             // Check if this is a UDP over TCP request
             if destination.addr.contains("udp-over-tcp.arpa") {
-                tracing::info!("[Proxy] Detected UDP over TCP request");
+                tracing::debug!("[Proxy] Detected UDP over TCP request");
                 if peer_version >= 2 {
-                    tracing::info!(
-                        "[Proxy] 📤 Sending SYNACK for UDP stream {} (connection established)",
+                    tracing::debug!(
+                        "[Proxy] Sending SYNACK for UDP stream {} (connection established)",
                         stream_id
                     );
                     let synack_frame = Frame::control(Command::SynAck, stream_id);
@@ -111,8 +111,8 @@ struct SocksAddr {
 /// 新实现：直接使用 StreamReader，无需额外的 Mutex 包装
 async fn read_socks_addr(stream: Arc<Stream>) -> Result<SocksAddr> {
     let stream_id = stream.id();
-    tracing::info!(
-        "[Proxy] 📖 read_socks_addr: Starting to read SOCKS5 address from stream {}",
+    tracing::debug!(
+        "[Proxy] read_socks_addr: Starting to read SOCKS5 address from stream {}",
         stream_id
     );
 
@@ -120,8 +120,8 @@ async fn read_socks_addr(stream: Arc<Stream>) -> Result<SocksAddr> {
     let reader_mutex = stream.reader();
 
     // Read ATYP byte first
-    tracing::info!(
-        "[Proxy] 📖 read_socks_addr: Reading ATYP byte from stream {}",
+    tracing::trace!(
+        "[Proxy] read_socks_addr: Reading ATYP byte from stream {}",
         stream_id
     );
     let mut atyp_buf = [0u8; 1];
@@ -132,8 +132,8 @@ async fn read_socks_addr(stream: Arc<Stream>) -> Result<SocksAddr> {
             .await
             .map_err(|e| AnyTlsError::Protocol(format!("Failed to read address type: {}", e)))?;
     }
-    tracing::info!(
-        "[Proxy] ✅ read_socks_addr: Read ATYP={:02x} from stream {}",
+    tracing::trace!(
+        "[Proxy] read_socks_addr: Read ATYP={:02x} from stream {}",
         atyp_buf[0],
         stream_id
     );
@@ -143,8 +143,8 @@ async fn read_socks_addr(stream: Arc<Stream>) -> Result<SocksAddr> {
         match atyp {
             0x01 => {
                 // IPv4: 4 bytes
-                tracing::info!(
-                    "[Proxy] 📖 read_socks_addr: Reading IPv4 address (stream {})",
+                tracing::trace!(
+                    "[Proxy] read_socks_addr: Reading IPv4 address (stream {})",
                     stream_id
                 );
                 let mut ip_buf = [0u8; 4];
@@ -158,8 +158,8 @@ async fn read_socks_addr(stream: Arc<Stream>) -> Result<SocksAddr> {
             }
             0x03 => {
                 // Domain name: [LEN (1 byte) | DOMAIN (LEN bytes)]
-                tracing::info!(
-                    "[Proxy] 📖 read_socks_addr: Reading domain name (stream {})",
+                tracing::trace!(
+                    "[Proxy] read_socks_addr: Reading domain name (stream {})",
                     stream_id
                 );
                 let mut len_buf = [0u8; 1];
@@ -171,8 +171,8 @@ async fn read_socks_addr(stream: Arc<Stream>) -> Result<SocksAddr> {
                 }
 
                 let domain_len = len_buf[0] as usize;
-                tracing::info!(
-                    "[Proxy] 📖 read_socks_addr: Domain length={} (stream {})",
+                tracing::trace!(
+                    "[Proxy] read_socks_addr: Domain length={} (stream {})",
                     domain_len,
                     stream_id
                 );
@@ -193,8 +193,8 @@ async fn read_socks_addr(stream: Arc<Stream>) -> Result<SocksAddr> {
             }
             0x04 => {
                 // IPv6: 16 bytes
-                tracing::info!(
-                    "[Proxy] 📖 read_socks_addr: Reading IPv6 address (stream {})",
+                tracing::trace!(
+                    "[Proxy] read_socks_addr: Reading IPv6 address (stream {})",
                     stream_id
                 );
                 let mut ip_buf = [0u8; 16];
@@ -215,8 +215,8 @@ async fn read_socks_addr(stream: Arc<Stream>) -> Result<SocksAddr> {
         };
 
     // Read port (2 bytes, big-endian)
-    tracing::info!(
-        "[Proxy] 📖 read_socks_addr: Reading port (stream {})",
+    tracing::trace!(
+        "[Proxy] read_socks_addr: Reading port (stream {})",
         stream_id
     );
     let mut port_buf = [0u8; 2];
@@ -229,8 +229,8 @@ async fn read_socks_addr(stream: Arc<Stream>) -> Result<SocksAddr> {
     }
     let port = u16::from_be_bytes(port_buf);
 
-    tracing::info!(
-        "[Proxy] ✅ read_socks_addr: Successfully read address {}:{} from stream {}",
+    tracing::debug!(
+        "[Proxy] read_socks_addr: Successfully read address {}:{} from stream {}",
         addr,
         port,
         stream_id
@@ -246,13 +246,13 @@ async fn proxy_tcp_connection_with_synack_internal(
     peer_version: u8,
     destination: SocksAddr,
 ) -> Result<()> {
-    tracing::info!(
-        "[Proxy] 🚀 proxy_tcp_connection_with_synack: Starting for stream {} (peer_version={})",
+    tracing::debug!(
+        "[Proxy] proxy_tcp_connection_with_synack: Starting for stream {} (peer_version={})",
         stream_id,
         peer_version
     );
-    tracing::info!(
-        "[Proxy] 🔗 Connecting to {}:{}",
+    tracing::debug!(
+        "[Proxy] Connecting to {}:{}",
         destination.addr,
         destination.port
     );
@@ -264,14 +264,14 @@ async fn proxy_tcp_connection_with_synack_internal(
     let outbound = match TcpStream::connect(&target_addr).await {
         Ok(conn) => {
             tracing::info!(
-                "[Proxy] ✅ Successfully connected to {}:{}",
+                "[Proxy] Successfully connected to {}:{}",
                 destination.addr,
                 destination.port
             );
             conn
         }
         Err(e) => {
-            tracing::error!("[Proxy] ❌ Failed to connect to {}: {}", target_addr, e);
+            tracing::error!("[Proxy] Failed to connect to {}: {}", target_addr, e);
             // Send SYNACK with error if protocol version >= 2
             // Note: All streams should receive SYNACK in protocol v2+, including stream_id=1
             if peer_version >= 2 {
@@ -293,8 +293,8 @@ async fn proxy_tcp_connection_with_synack_internal(
     // Note: All streams should receive SYNACK in protocol v2+, including stream_id=1
     // Similar to Go's ReportHandshakeSuccess - called after TCP connection is established
     if peer_version >= 2 {
-        tracing::info!(
-            "[Proxy] 📤 Sending SYNACK for stream {} (connection established)",
+        tracing::debug!(
+            "[Proxy] Sending SYNACK for stream {} (connection established)",
             stream_id
         );
         let synack_frame = Frame::control(Command::SynAck, stream_id);
@@ -302,12 +302,12 @@ async fn proxy_tcp_connection_with_synack_internal(
             tracing::error!("[Proxy] Failed to send SYNACK: {}", e);
             return Err(e);
         }
-        tracing::info!("[Proxy] ✅ SYNACK sent for stream {}", stream_id);
+        tracing::debug!("[Proxy] SYNACK sent for stream {}", stream_id);
     }
 
     // Now forward data bidirectionally
-    tracing::info!(
-        "[Proxy] 🔄 proxy_tcp_connection_with_synack: Calling proxy_tcp_connection_data_forwarding for stream {}",
+    tracing::debug!(
+        "[Proxy] proxy_tcp_connection_with_synack: Calling proxy_tcp_connection_data_forwarding for stream {}",
         stream_id
     );
     proxy_tcp_connection_data_forwarding(stream, outbound, destination).await
@@ -323,7 +323,7 @@ async fn proxy_tcp_connection_data_forwarding(
     destination: SocksAddr,
 ) -> Result<()> {
     let stream_id = stream.id();
-    tracing::info!(
+    tracing::debug!(
         "[Proxy] Starting data forwarding for stream {} to {}:{}",
         stream_id,
         destination.addr,
@@ -487,7 +487,7 @@ async fn proxy_tcp_connection_data_forwarding(
     let outbound_bytes = bytes_to_outbound.load(Ordering::Relaxed);
     let client_bytes = bytes_to_client.load(Ordering::Relaxed);
 
-    tracing::info!(
+    tracing::debug!(
         stream_id = stream_id,
         bytes_outbound = outbound_bytes,
         bytes_client = client_bytes,

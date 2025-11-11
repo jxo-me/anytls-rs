@@ -57,7 +57,7 @@ async fn handle_http_proxy_connection(
 
     let request = parse_http_request(&header_str, remaining)?;
 
-    tracing::info!(
+    tracing::debug!(
         "[HTTP] Request: method={} host={} port={} path={} connect={}",
         request.method,
         request.host,
@@ -94,7 +94,7 @@ async fn handle_http_proxy_connection(
     let session_for_write = Arc::clone(&session);
     let stream_id = proxy_stream.id();
 
-    tracing::info!(
+    tracing::debug!(
         "[HTTP] Established tunnel for {}:{}, stream={}",
         request.host,
         request.port,
@@ -145,7 +145,7 @@ async fn handle_http_proxy_connection(
 
     let _ = tokio::join!(to_client, to_proxy);
 
-    tracing::info!(
+    tracing::debug!(
         "[HTTP] Connection to {}:{} closed (stream {})",
         request.host,
         request.port,
