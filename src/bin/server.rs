@@ -3,10 +3,13 @@
 use anyhow::{Context, Result};
 use anytls_rs::padding::PaddingFactory;
 use anytls_rs::server::Server;
-use anytls_rs::util::{StringMap, create_server_config, create_server_config_from_files};
+use anytls_rs::util::{CertReloader, CertReloaderConfig, StringMap, create_server_config};
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::signal::unix::{SignalKind, signal};
 use tokio_rustls::TlsAcceptor;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const APP_NAME: &str = "anytls-server";
@@ -24,6 +27,9 @@ async fn main() -> Result<()> {
     let mut idle_session_timeout: Option<u64> = None;
     let mut min_idle_session: Option<usize> = None;
     let mut log_level = "info".to_string();
+    let mut watch_cert = false;
+    let mut show_cert_info = false;
+    let mut expiry_warning_days: u64 = 30;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -75,12 +81,25 @@ async fn main() -> Result<()> {
                     .next()
                     .context("Expected log level after --log-level")?;
             }
+            "--watch-cert" => {
+                watch_cert = true;
+            }
+            "--show-cert-info" => {
+                show_cert_info = true;
+            }
+            "--expiry-warning-days" => {
+                let value = args
+                    .next()
+                    .context("Expected days after --expiry-warning-days")?;
+                expiry_warning_days = parse_u64(&value, "--expiry-warning-days")?;
+            }
             "-V" | "--version" => {
                 println!("{APP_NAME} {VERSION}");
                 return Ok(());
             }
             "-h" | "--help" => {
                 println!("Usage: anytls-server [OPTIONS]");
+                println!();
                 println!("Options:");
                 println!("  -l, --listen ADDRESS      Listen address (default: 0.0.0.0:8443)");
                 println!("  -p, --password PASSWORD    Server password (required)");
@@ -97,6 +116,20 @@ async fn main() -> Result<()> {
                 println!(
                     "  -L, --log-level LEVEL     Log level: error|warn|info|debug|trace (default: info)"
                 );
+                println!();
+                println!("Certificate Options:");
+                println!(
+                    "      --watch-cert          Watch certificate files for changes and auto-reload"
+                );
+                println!("      --show-cert-info      Display certificate information at startup");
+                println!(
+                    "      --expiry-warning-days DAYS  Certificate expiry warning threshold (default: 30)"
+                );
+                println!();
+                println!("Signal Handling:");
+                println!("      SIGHUP                Manually reload TLS certificates");
+                println!();
+                println!("Other:");
                 println!("  -V, --version             Show version information");
                 println!("  -h, --help                Show this help message");
                 return Ok(());
@@ -130,24 +163,46 @@ async fn main() -> Result<()> {
         PaddingFactory::default()
     };
 
-    // Create TLS config
-    let tls_config = match (cert_path.as_deref(), key_path.as_deref()) {
+    info!("{APP_NAME} v{VERSION}");
+
+    // Create TLS acceptor with optional certificate reloading
+    let (tls_acceptor_ref, cert_reloader) = match (cert_path.as_deref(), key_path.as_deref()) {
         (Some(cert), Some(key)) => {
             info!("[Server] Loading TLS certificate from {}", cert);
-            create_server_config_from_files(cert, key)
-                .with_context(|| format!("Failed to load certificate/key: {cert}, {key}"))?
+
+            // Create certificate reloader
+            let config = CertReloaderConfig {
+                cert_path: PathBuf::from(cert),
+                key_path: PathBuf::from(key),
+                watch_enabled: watch_cert,
+                debounce_ms: 500,
+                check_expiry: true,
+                expiry_warning_days,
+            };
+
+            let reloader = CertReloader::new(config)
+                .with_context(|| format!("Failed to load certificate/key: {cert}, {key}"))?;
+
+            // Show certificate info if requested
+            if show_cert_info {
+                reloader.show_cert_info();
+            }
+
+            let acceptor_ref = reloader.get_acceptor_ref();
+            (acceptor_ref, Some(Arc::new(reloader)))
         }
         (None, None) => {
             info!("[Server] No certificate provided, generating self-signed certificate");
-            create_server_config().context("Failed to create TLS server config")?
+            let tls_config =
+                create_server_config().context("Failed to create TLS server config")?;
+            let tls_acceptor = Arc::new(TlsAcceptor::from(tls_config));
+            (Arc::new(std::sync::RwLock::new(tls_acceptor)), None)
         }
         _ => {
             anyhow::bail!("Both --cert and --key must be provided together");
         }
     };
-    let tls_acceptor = TlsAcceptor::from(tls_config);
 
-    info!("{APP_NAME} v{VERSION}");
     info!("Listening on {}", listen_addr);
 
     let mut server_settings_map = StringMap::new();
@@ -167,7 +222,57 @@ async fn main() -> Result<()> {
     };
 
     // Create and start server
-    let server = Server::new(&password, Arc::new(tls_acceptor), padding, server_settings);
+    let server =
+        Server::new_with_reloadable_tls(&password, tls_acceptor_ref, padding, server_settings);
+
+    // Start certificate file watching if enabled
+    if let Some(ref reloader) = cert_reloader
+        && watch_cert
+    {
+        let reloader_clone = reloader.clone();
+        if let Err(e) = reloader_clone.start_watching() {
+            warn!("[Server] Failed to start certificate file watching: {}", e);
+        } else {
+            info!("[Server] Certificate file watching enabled");
+        }
+
+        // Start expiry checker (check every hour)
+        reloader
+            .clone()
+            .start_expiry_checker(Duration::from_secs(3600));
+    }
+
+    // Setup SIGHUP signal handler for manual reload
+    if let Some(reloader) = cert_reloader.clone() {
+        tokio::spawn(async move {
+            let mut sighup = match signal(SignalKind::hangup()) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!("[Server] Failed to setup SIGHUP handler: {}", e);
+                    return;
+                }
+            };
+
+            info!("[Server] SIGHUP handler ready (send SIGHUP to reload certificates)");
+
+            loop {
+                sighup.recv().await;
+                info!("[Server] SIGHUP received, reloading certificates...");
+
+                match reloader.reload() {
+                    Ok(_) => {
+                        info!("[Server] Certificate reload successful");
+                        if let Some(info) = reloader.get_cert_info() {
+                            info!("[Server] New certificate: {}", info.summary());
+                        }
+                    }
+                    Err(e) => {
+                        error!("[Server] Certificate reload failed: {}", e);
+                    }
+                }
+            }
+        });
+    }
 
     // Start listening
     server

@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented in this file. Dates use `YYYY-MM-DD`.
 
+## [0.5.0] - 2025-11-11
+
+### Added
+- **TLS Certificate Hot Reload**: Automatic and manual certificate reloading without downtime
+  - File watching with `--watch-cert` flag for automatic reload on certificate changes
+  - Manual reload via SIGHUP signal (`kill -HUP <pid>`)
+  - Certificate information display with `--show-cert-info` flag
+  - Certificate expiry monitoring and warnings with configurable threshold
+  - Atomic TLS acceptor updates ensuring zero-downtime certificate rotation
+- Certificate analysis utilities (`CertificateInfo`, `CertReloader`)
+  - Detailed certificate information extraction (subject, issuer, validity, SANs)
+  - Certificate status detection (valid, expiring, expired)
+  - Self-signed certificate identification
+- Comprehensive integration tests for certificate reload functionality
+
+### Changed
+- **Logging Optimization**: Refined log levels for better production use
+  - Downgraded high-frequency operations from `info` to `debug`/`trace`
+  - Retained important events (connections, sessions) at `info` level
+  - Added `-L/--log-level` flag to server and client for runtime control
+- **Tokio Dependencies**: Optimized from `full` feature to specific features
+  - Reduced to: `macros`, `rt-multi-thread`, `io-util`, `io-std`, `net`, `sync`, `time`, `signal`, `fs`
+  - Smaller binary size and faster compilation times
+  - Maintained `full` feature as an optional fallback
+- Server TLS acceptor architecture refactored to support hot-reloading via `Arc<RwLock<Arc<TlsAcceptor>>>`
+
+### Dependencies
+- Added `notify = "8.2"` for file system monitoring
+- Added `x509-parser = "0.18"` for certificate parsing
+- Added `chrono = "0.4"` for date/time handling
+- Added `tempfile = "3.8"` and `base64 = "0.22"` for testing
+
+### Documentation
+- Added comprehensive TLS certificate reload guide (`docs/TLS_CERT_RELOAD_GUIDE.md`)
+- Updated help text with certificate options and signal handling documentation
+
+### Testing
+- Added 5 integration tests for certificate loading and reload functionality
+- All 73 tests passing with full coverage of new features
+
 ## [0.4.1] - 2025-11-09
 
 ### Fixed

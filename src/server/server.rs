@@ -4,7 +4,7 @@ use crate::padding::PaddingFactory;
 use crate::server::handler::{StreamHandler, TcpProxyHandler};
 use crate::session::Session;
 use crate::util::{AnyTlsError, Result, StringMap, authenticate_client, hash_password};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
 use tracing::{Instrument, Span, field, info_span};
@@ -12,7 +12,7 @@ use tracing::{Instrument, Span, field, info_span};
 /// Server manages AnyTLS server connections
 pub struct Server {
     password_hash: [u8; 32],
-    tls_config: Arc<TlsAcceptor>,
+    tls_config: Arc<RwLock<Arc<TlsAcceptor>>>,
     padding: Arc<PaddingFactory>,
     on_new_stream: Option<Arc<dyn Fn(Arc<crate::session::Stream>) + Send + Sync + 'static>>,
     server_settings: Option<StringMap>,
@@ -23,6 +23,24 @@ impl Server {
     pub fn new(
         password: &str,
         tls_config: Arc<TlsAcceptor>,
+        padding: Arc<PaddingFactory>,
+        server_settings: Option<StringMap>,
+    ) -> Self {
+        let password_hash = hash_password(password);
+
+        Self {
+            password_hash,
+            tls_config: Arc::new(RwLock::new(tls_config)),
+            padding,
+            on_new_stream: None,
+            server_settings,
+        }
+    }
+
+    /// Create a new server with reloadable TLS config
+    pub fn new_with_reloadable_tls(
+        password: &str,
+        tls_config: Arc<RwLock<Arc<TlsAcceptor>>>,
         padding: Arc<PaddingFactory>,
         server_settings: Option<StringMap>,
     ) -> Self {
@@ -55,7 +73,7 @@ impl Server {
         loop {
             match listener.accept().await {
                 Ok((stream, addr)) => {
-                    let tls_config = Arc::clone(&self.tls_config);
+                    let tls_config = self.tls_config.read().unwrap().clone();
                     let password_hash = self.password_hash;
                     let padding = Arc::clone(&self.padding);
                     let on_new_stream = self.on_new_stream.clone();
