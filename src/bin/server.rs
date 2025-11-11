@@ -7,6 +7,7 @@ use anytls_rs::util::{CertReloader, CertReloaderConfig, StringMap, create_server
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+#[cfg(unix)]
 use tokio::signal::unix::{SignalKind, signal};
 use tokio_rustls::TlsAcceptor;
 use tracing::{error, info, warn};
@@ -125,9 +126,12 @@ async fn main() -> Result<()> {
                 println!(
                     "      --expiry-warning-days DAYS  Certificate expiry warning threshold (default: 30)"
                 );
-                println!();
-                println!("Signal Handling:");
-                println!("      SIGHUP                Manually reload TLS certificates");
+                #[cfg(unix)]
+                {
+                    println!();
+                    println!("Signal Handling:");
+                    println!("      SIGHUP                Manually reload TLS certificates");
+                }
                 println!();
                 println!("Other:");
                 println!("  -V, --version             Show version information");
@@ -242,7 +246,8 @@ async fn main() -> Result<()> {
             .start_expiry_checker(Duration::from_secs(3600));
     }
 
-    // Setup SIGHUP signal handler for manual reload
+    // Setup SIGHUP signal handler for manual reload (Unix only)
+    #[cfg(unix)]
     if let Some(reloader) = cert_reloader.clone() {
         tokio::spawn(async move {
             let mut sighup = match signal(SignalKind::hangup()) {
@@ -272,6 +277,11 @@ async fn main() -> Result<()> {
                 }
             }
         });
+    }
+
+    #[cfg(not(unix))]
+    if cert_reloader.is_some() {
+        info!("[Server] Note: SIGHUP signal reload not available on Windows. Use --watch-cert for automatic reload.");
     }
 
     // Start listening
