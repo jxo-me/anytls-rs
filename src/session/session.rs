@@ -267,10 +267,10 @@ impl Session {
             iterations = field::Empty
         );
         let _recv_guard = recv_span.enter();
-        tracing::info!(
+        tracing::debug!(
             session_id = session_id,
             is_client = self.is_client,
-            "[Session] 🔄 recv_loop started"
+            "[Session] recv_loop started"
         );
         let mut codec = FrameCodec;
         let mut buffer = BytesMut::with_capacity(8192);
@@ -405,7 +405,7 @@ impl Session {
             "[Session] recv_loop: Exiting after {} iterations",
             iteration
         );
-        tracing::info!(
+        tracing::debug!(
             session_id = session_id,
             bytes_in = total_bytes_in as u64,
             iterations = iteration,
@@ -419,9 +419,9 @@ impl Session {
     /// Handle an incoming frame from connection
     async fn handle_frame(&self, frame: Frame) -> Result<()> {
         let session_id = self.id();
-        tracing::info!(
+        tracing::debug!(
             session_id = session_id,
-            "[Session] 🔀 handle_frame: Processing frame cmd={:?}, stream_id={}, data_len={}",
+            "[Session] handle_frame: Processing frame cmd={:?}, stream_id={}, data_len={}",
             frame.cmd,
             frame.stream_id,
             frame.data.len()
@@ -826,11 +826,11 @@ impl Session {
 
     /// Write a data frame to connection
     pub async fn write_data_frame(&self, stream_id: u32, data: Bytes) -> Result<()> {
-        tracing::info!(
+        tracing::trace!(
             session_id = self.id(),
             stream_id,
             bytes = data.len(),
-            "[Session] 📤 write_data_frame: stream_id={}, data_len={}",
+            "[Session] write_data_frame: stream_id={}, data_len={}",
             stream_id,
             data.len()
         );
@@ -1076,7 +1076,7 @@ impl Session {
         if let Err(e) = writer.flush().await {
             return Err(self.handle_io_error("flush_with_padding", e).await);
         }
-        tracing::info!("[Session] ✅ write_with_padding: Successfully wrote and flushed data");
+        tracing::debug!("[Session] write_with_padding: Successfully wrote and flushed data");
         Ok(())
     }
 
@@ -1103,8 +1103,8 @@ impl Session {
         // Start receive loop in background
         let session = Arc::clone(&self);
         tokio::spawn(async move {
-            tracing::info!(
-                "[Session] ✅ recv_loop task spawned! Starting receive loop (client={})",
+            tracing::debug!(
+                "[Session] recv_loop task spawned (client={})",
                 session.is_client
             );
             match session.recv_loop().await {
@@ -1137,8 +1137,8 @@ impl Session {
         // Start stream data processing in background
         let session = Arc::clone(&self);
         tokio::spawn(async move {
-            tracing::info!(
-                "[Session] ✅ process_stream_data task spawned! Starting stream data processing (client={})",
+            tracing::debug!(
+                "[Session] process_stream_data task spawned (client={})",
                 session.is_client
             );
             if let Err(e) = session.process_stream_data().await {
@@ -1439,7 +1439,7 @@ mod tests {
             "Server session should not be closed"
         );
 
-        tracing::info!("✅ Heartbeat request-response test passed");
+        tracing::debug!("Heartbeat request-response test passed");
     }
 
     #[tokio::test]
@@ -1506,7 +1506,7 @@ mod tests {
             "Server session should not be closed after multiple heartbeats"
         );
 
-        tracing::info!("✅ Multiple heartbeat requests test passed");
+        tracing::debug!("Multiple heartbeat requests test passed");
     }
 
     #[tokio::test]
@@ -1561,6 +1561,6 @@ mod tests {
         assert!(!session1.is_closed());
         assert!(!session2.is_closed());
 
-        tracing::info!("✅ Bidirectional heartbeat test passed");
+        tracing::debug!("Bidirectional heartbeat test passed");
     }
 }

@@ -113,14 +113,14 @@ async fn handle_connection(
         cipher_suite = field::Empty
     );
     let _handshake_guard = handshake_span.enter();
-    tracing::info!("[Server] 🔌 New connection from {}", peer_addr);
+    tracing::info!("[Server] New connection from {}", peer_addr);
     // Perform TLS handshake
-    tracing::info!("[Server] 🔐 Starting TLS handshake");
+    tracing::debug!("[Server] Starting TLS handshake");
     let tls_stream = tls_config.accept(tcp_stream).await.map_err(|e| {
-        tracing::error!("[Server] ❌ TLS handshake failed: {}", e);
+        tracing::error!("[Server] TLS handshake failed: {}", e);
         AnyTlsError::Tls(format!("TLS handshake failed: {}", e))
     })?;
-    tracing::info!("[Server] ✅ TLS handshake successful");
+    tracing::debug!("[Server] TLS handshake successful");
     let (_, server_connection) = tls_stream.get_ref();
     if let Some(protocol) = server_connection.protocol_version() {
         handshake_span.record("tls_version", field::display(format!("{:?}", protocol)));
@@ -133,10 +133,10 @@ async fn handle_connection(
     }
 
     // Authenticate client
-    tracing::info!("[Server] 🔐 Authenticating client");
+    tracing::debug!("[Server] Authenticating client");
     let (mut reader, writer) = tokio::io::split(tls_stream);
     authenticate_client(&mut reader, &password_hash, &padding).await?;
-    tracing::info!("[Server] ✅ Client authenticated");
+    tracing::info!("[Server] Client authenticated");
 
     // Create callback channel for new streams
     let (stream_callback_tx, mut stream_callback_rx) =
@@ -157,7 +157,8 @@ async fn handle_connection(
     tracing::info!(
         session_id = session_id,
         peer_addr = %peer_addr,
-        "[Server] 📋 Session created, setting up handlers"
+        "[Server] Session {} created",
+        session_id
     );
 
     // Handle new streams in a task
@@ -216,7 +217,7 @@ async fn handle_connection(
     }
 
     // Start receive loop
-    tracing::info!("[Server] 🚀 Starting receive loop");
+    tracing::debug!("[Server] Starting receive loop");
     let session_clone = Arc::clone(&session);
     let recv_span = info_span!(
         "anytls.session.recv_loop",
@@ -225,10 +226,10 @@ async fn handle_connection(
     );
     tokio::spawn(
         async move {
-            tracing::info!("[Server] ✅ recv_loop task spawned! Starting server receive loop");
+            tracing::debug!("[Server] recv_loop task spawned");
             match session_clone.recv_loop().await {
                 Ok(()) => {
-                    tracing::info!("[Server] recv_loop task completed normally");
+                    tracing::debug!("[Server] recv_loop task completed normally");
                 }
                 Err(AnyTlsError::Io(e)) => {
                     // Check if this is a close_notify error (normal connection close)
@@ -256,7 +257,7 @@ async fn handle_connection(
     );
 
     // Start stream data processing
-    tracing::info!("[Server] 🚀 Starting stream data processing");
+    tracing::debug!("[Server] Starting stream data processing");
     let session_clone = Arc::clone(&session);
     let process_span = info_span!(
         "anytls.session.process_stream_data",
@@ -265,13 +266,11 @@ async fn handle_connection(
     );
     tokio::spawn(
         async move {
-            tracing::info!(
-                "[Server] ✅ process_stream_data task spawned! Starting server stream data processing"
-            );
+            tracing::debug!("[Server] process_stream_data task spawned");
             if let Err(e) = session_clone.process_stream_data().await {
                 tracing::error!("[Server] process_stream_data task error: {}", e);
             } else {
-                tracing::info!("[Server] process_stream_data task completed normally");
+                tracing::debug!("[Server] process_stream_data task completed normally");
             }
         }
         .instrument(process_span),

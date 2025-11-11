@@ -8,13 +8,13 @@ use tokio::time::{Duration, sleep};
 
 #[tokio::test]
 async fn test_server_startup() -> Result<()> {
-    let config = TestConfig::default();
+    let config = new_test_config()?;
     let server = create_test_server(&config).await?;
 
     // Start server in background
     let server_clone = server.clone();
     let server_addr = config.server_addr.clone();
-    tokio::spawn(async move {
+    let server_handle = tokio::spawn(async move {
         if let Err(e) = server_clone.listen(&server_addr).await {
             eprintln!("Server error: {}", e);
         }
@@ -30,18 +30,21 @@ async fn test_server_startup() -> Result<()> {
         config.server_addr
     );
 
+    server_handle.abort();
+    let _ = server_handle.await;
+
     Ok(())
 }
 
 #[tokio::test]
 async fn test_client_startup() -> Result<()> {
-    let config = TestConfig::default();
+    let config = new_test_config()?;
 
     // Start server first
     let server = create_test_server(&config).await?;
     let server_clone = server.clone();
     let server_addr = config.server_addr.clone();
-    tokio::spawn(async move {
+    let server_handle = tokio::spawn(async move {
         if let Err(e) = server_clone.listen(&server_addr).await {
             eprintln!("Server error: {}", e);
         }
@@ -53,7 +56,7 @@ async fn test_client_startup() -> Result<()> {
     let client = create_test_client(&config).await?;
     let client_clone = client.clone();
     let client_listen = config.client_listen.clone();
-    tokio::spawn(async move {
+    let socks5_handle = tokio::spawn(async move {
         if let Err(e) = anytls_rs::client::start_socks5_server(&client_listen, client_clone).await {
             eprintln!("Client error: {}", e);
         }
@@ -69,12 +72,19 @@ async fn test_client_startup() -> Result<()> {
         config.client_listen
     );
 
+    socks5_handle.abort();
+    let _ = socks5_handle.await;
+    client.stop_session_pool_cleanup().await;
+    drop(client);
+    server_handle.abort();
+    let _ = server_handle.await;
+
     Ok(())
 }
 
 #[tokio::test]
 async fn test_client_server_connection() -> Result<()> {
-    let config = TestConfig::default();
+    let config = new_test_config()?;
 
     // Start server
     let server = create_test_server(&config).await?;
@@ -108,6 +118,7 @@ async fn test_client_server_connection() -> Result<()> {
     session.close().await?;
     client.stop_session_pool_cleanup().await;
     drop(client);
+    drop(server);
 
     server_handle.abort();
     let _ = server_handle.await;

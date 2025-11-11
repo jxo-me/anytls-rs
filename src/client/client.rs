@@ -126,8 +126,8 @@ impl Client {
         // This avoids the need to unwrap Arc<Stream> which fails when multiple references exist
         let stream_id = stream.id();
         use bytes::Bytes;
-        tracing::info!(
-            "[Client] 📤 Writing destination address ({} bytes) to stream {}",
+        tracing::debug!(
+            "[Client] Writing destination address ({} bytes) to stream {}",
             addr_bytes.len(),
             stream_id
         );
@@ -136,18 +136,18 @@ impl Client {
         // This is critical: in Go version, buffering is disabled when proxy writes SocksAddr
         // This ensures buffered Settings frame is flushed along with the first data
         session.disable_buffering();
-        tracing::info!("[Client] ✅ Buffering disabled, buffer will be flushed");
+        tracing::debug!("[Client] Buffering disabled, buffer will be flushed");
 
         session
             .write_data_frame(stream_id, Bytes::from(addr_bytes))
             .await?;
 
-        tracing::info!(
-            "[Client] ✅ Successfully wrote destination address to stream {}",
+        tracing::debug!(
+            "[Client] Successfully wrote destination address to stream {}",
             stream_id
         );
-        tracing::info!(
-            "[Client] ⏳ Waiting for SYNACK from server for stream {}...",
+        tracing::debug!(
+            "[Client] Waiting for SYNACK from server for stream {}...",
             stream_id
         );
 
@@ -156,28 +156,28 @@ impl Client {
 
         match tokio::time::timeout(DEFAULT_SYNACK_TIMEOUT, synack_rx).await {
             Ok(Ok(Ok(()))) => {
-                tracing::info!(
-                    "[Client] ✅ SYNACK received for stream {} - stream ready",
+                tracing::debug!(
+                    "[Client] SYNACK received for stream {} - stream ready",
                     stream_id
                 );
                 Ok((stream, session))
             }
             Ok(Ok(Err(e))) => {
-                tracing::error!("[Client] ❌ SYNACK error for stream {}: {}", stream_id, e);
+                tracing::error!("[Client] SYNACK error for stream {}: {}", stream_id, e);
                 let error_msg = e.to_string();
                 let error = AnyTlsError::Protocol(error_msg.clone());
                 stream.close_with_error(error).await;
                 Err(AnyTlsError::Protocol(error_msg))
             }
             Ok(Err(_)) => {
-                tracing::error!("[Client] ❌ SYNACK channel closed for stream {}", stream_id);
+                tracing::error!("[Client] SYNACK channel closed for stream {}", stream_id);
                 let error = AnyTlsError::Protocol("SYNACK channel closed".into());
                 stream.close_with_error(error).await;
                 Err(AnyTlsError::Protocol("SYNACK channel closed".into()))
             }
             Err(_) => {
                 tracing::error!(
-                    "[Client] ⏰ SYNACK timeout for stream {} after {}s",
+                    "[Client] SYNACK timeout for stream {} after {}s",
                     stream_id,
                     DEFAULT_SYNACK_TIMEOUT.as_secs()
                 );

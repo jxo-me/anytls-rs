@@ -13,15 +13,7 @@ const APP_NAME: &str = "anytls-server";
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
-
-    // Parse command line arguments
+    // Parse command line arguments first to get log level
     let mut args = std::env::args().skip(1);
     let mut listen_addr = "0.0.0.0:8443".to_string();
     let mut password = None;
@@ -31,6 +23,7 @@ async fn main() -> Result<()> {
     let mut idle_session_check_interval: Option<u64> = None;
     let mut idle_session_timeout: Option<u64> = None;
     let mut min_idle_session: Option<usize> = None;
+    let mut log_level = "info".to_string();
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -77,6 +70,11 @@ async fn main() -> Result<()> {
                     .context("Expected value after --min-idle-session")?;
                 min_idle_session = Some(parse_usize(&value, "--min-idle-session")?);
             }
+            "-L" | "--log-level" => {
+                log_level = args
+                    .next()
+                    .context("Expected log level after --log-level")?;
+            }
             "-V" | "--version" => {
                 println!("{APP_NAME} {VERSION}");
                 return Ok(());
@@ -96,6 +94,9 @@ async fn main() -> Result<()> {
                     "  -T, --idle-session-timeout SECS         Hint for clients (default: 60)"
                 );
                 println!("  -M, --min-idle-session COUNT            Hint for clients (default: 1)");
+                println!(
+                    "  -L, --log-level LEVEL     Log level: error|warn|info|debug|trace (default: info)"
+                );
                 println!("  -V, --version             Show version information");
                 println!("  -h, --help                Show this help message");
                 return Ok(());
@@ -107,6 +108,14 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Initialize tracing with configured log level
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&log_level)),
+        )
+        .init();
+
     let password = password.context("Password is required (use -p or --password)")?;
 
     // Load padding scheme if provided
@@ -115,7 +124,7 @@ async fn main() -> Result<()> {
             .with_context(|| format!("Failed to read padding scheme file: {}", file_path))?;
         let factory = PaddingFactory::new(&scheme_bytes)
             .map_err(|e| anyhow::anyhow!("Failed to parse padding scheme: {}", e))?;
-        info!("Loaded padding scheme from: {}", file_path);
+        info!("[Server] Loaded padding scheme from: {}", file_path);
         Arc::new(factory)
     } else {
         PaddingFactory::default()
@@ -138,8 +147,8 @@ async fn main() -> Result<()> {
     };
     let tls_acceptor = TlsAcceptor::from(tls_config);
 
-    info!("[Server] {APP_NAME} v{VERSION}");
-    info!("[Server] Listening TCP {}", listen_addr);
+    info!("{APP_NAME} v{VERSION}");
+    info!("Listening on {}", listen_addr);
 
     let mut server_settings_map = StringMap::new();
     if let Some(interval) = idle_session_check_interval {

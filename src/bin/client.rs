@@ -14,15 +14,7 @@ const APP_NAME: &str = "anytls-client";
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
-
-    // Parse command line arguments
+    // Parse command line arguments first to get log level
     let mut args = std::env::args().skip(1);
     let mut listen_addr = "127.0.0.1:1080".to_string();
     let mut http_listen_addr: Option<String> = None;
@@ -32,6 +24,7 @@ async fn main() -> Result<()> {
     let mut idle_check_interval: Option<u64> = None;
     let mut idle_timeout: Option<u64> = None;
     let mut min_idle_sessions: Option<usize> = None;
+    let mut log_level = "info".to_string();
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -71,6 +64,11 @@ async fn main() -> Result<()> {
                     .context("Expected value after --min-idle-session")?;
                 min_idle_sessions = Some(parse_usize(&value, "--min-idle-session")?);
             }
+            "-L" | "--log-level" => {
+                log_level = args
+                    .next()
+                    .context("Expected log level after --log-level")?;
+            }
             "-V" | "--version" => {
                 println!("{APP_NAME} {VERSION}");
                 return Ok(());
@@ -93,6 +91,9 @@ async fn main() -> Result<()> {
                 println!(
                     "  -M, --min-idle-session COUNT            Minimum idle sessions retained (default: 1)"
                 );
+                println!(
+                    "  -L, --log-level LEVEL     Log level: error|warn|info|debug|trace (default: info)"
+                );
                 println!("  -V, --version             Show version information");
                 println!("  -p, --password PASSWORD  Server password (required)");
                 println!("  -h, --help                Show this help message");
@@ -104,6 +105,14 @@ async fn main() -> Result<()> {
             }
         }
     }
+
+    // Initialize tracing with configured log level
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&log_level)),
+        )
+        .init();
 
     let password = password.context("Password is required (use -p or --password)")?;
 
@@ -127,14 +136,14 @@ async fn main() -> Result<()> {
         pool_config.min_idle_sessions = count;
     }
 
-    info!("[Client] {APP_NAME} v{VERSION}");
+    info!("{APP_NAME} v{VERSION}");
     if let Some(http_addr) = http_listen_addr.as_ref() {
         info!(
-            "[Client] SOCKS5 {} + HTTP {} => {}",
+            "SOCKS5 {} + HTTP {} => {}",
             listen_addr, http_addr, server_addr
         );
     } else {
-        info!("[Client] SOCKS5 {} => {}", listen_addr, server_addr);
+        info!("SOCKS5 {} => {}", listen_addr, server_addr);
     }
 
     // Create client
@@ -146,7 +155,7 @@ async fn main() -> Result<()> {
         pool_config,
     ));
 
-    info!("[Client] Client created successfully");
+    info!("Client ready");
 
     // Start proxy servers
     if let Some(http_addr) = http_listen_addr {
