@@ -281,7 +281,9 @@ async fn main() -> Result<()> {
 
     #[cfg(not(unix))]
     if cert_reloader.is_some() {
-        info!("[Server] Note: SIGHUP signal reload not available on Windows. Use --watch-cert for automatic reload.");
+        info!(
+            "[Server] Note: SIGHUP signal reload not available on Windows. Use --watch-cert for automatic reload."
+        );
     }
 
     // Start listening
