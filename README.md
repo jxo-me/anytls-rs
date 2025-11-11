@@ -1,11 +1,11 @@
 # AnyTLS-RS
 
-[![Version](https://img.shields.io/badge/version-0.4.1-blue.svg)](https://github.com/jxo-me/anytls-rs)
+[![Version](https://img.shields.io/badge/version-0.5.2-blue.svg)](https://github.com/jxo-me/anytls-rs)
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
 [![Edition](https://img.shields.io/badge/edition-2024-blue.svg)](https://doc.rust-lang.org/edition-guide/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-高性能、可观测的 AnyTLS 协议 Rust 实现，专注缓解 TLS-in-TLS 指纹识别问题，支持 sing-box outbound ⇄ anytls-rs 服务端的端到端集成。
+高性能、可观测的 AnyTLS 协议 Rust 实现，专注缓解 TLS-in-TLS 指纹识别问题，支持 sing-box outbound ⇄ anytls-rs 服务端的端到端集成。支持 TLS 证书热重载、灵活的日志控制，适合生产环境部署。
 
 [English Version](README.en.md)
 
@@ -16,6 +16,16 @@
 - **多协议代理**：内置 SOCKS5 代理，新增 HTTP CONNECT/明文代理 (`anytls-client -H/--http-listen`)
 - **会话复用**：session pool 支持自定义空闲检查/超时/预热（`-I/-T/-M` 与环境变量映射）
 - **UDP-over-TCP**：兼容 sing-box v1.2 行为，自动发送 SYNACK，支持回环集成测试
+- **TLS 证书热重载** ⭐：
+  - 文件监听自动重载（`--watch-cert`）
+  - SIGHUP 信号手动触发（Unix/Linux/macOS）
+  - 零停机原子更新，不中断现有连接
+  - 证书到期监控和告警（`--expiry-warning-days`）
+  - 详细证书信息展示（`--show-cert-info`）
+- **灵活日志控制** ⭐：
+  - 运行时可配置日志级别（`-L/--log-level`）
+  - 优化的日志分层（info 只记录连接级事件，生产环境日志减少 70-80%）
+  - Debug/Trace 级别提供详细排查信息
 - **TLS 管理**：可加载 PEM 证书，也可自动生成 `anytls.local` 自签证书（脚本自动完成）
 - **脚本与自动化**：`scripts/dev-up.sh` 与 `scripts/dev-verify.sh` 提供最短启动与校验
 - **文档完备**：快速画像、开发者上手、MVP 方案、FAQ、ADR 全量覆盖
@@ -46,12 +56,15 @@
 ### 3. 手动运行（两个终端）
 
 ```bash
-# 终端 A：anytls-server（自签或手动提供证书）
+# 终端 A：anytls-server（生产配置示例）
 cargo run --release --bin anytls-server -- \
   -l 0.0.0.0:8443 \
   -p your_password \
   --cert ./examples/singbox/certs/anytls.local.crt \
   --key  ./examples/singbox/certs/anytls.local.key \
+  --watch-cert \
+  --expiry-warning-days 7 \
+  -L info \
   -I 30 -T 120 -M 1
 
 # 终端 B：anytls-client（SOCKS5 + HTTP 代理）
@@ -59,12 +72,16 @@ cargo run --release --bin anytls-client -- \
   -l 127.0.0.1:1080 \
   -s 127.0.0.1:8443 \
   -p your_password \
+  -L info \
   -I 30 -T 120 -M 1 \
   -H 127.0.0.1:8080
 
-# 第三终端：验证
+# 第三终端：验证代理功能
 curl --socks5-hostname 127.0.0.1:1080 http://httpbin.org/get
 curl -x http://127.0.0.1:8080 http://httpbin.org/get
+
+# 热重载证书（更新证书文件后）
+killall -HUP anytls-server  # 或发送 SIGHUP 信号
 ```
 
 ---
@@ -116,11 +133,19 @@ anytls-rs/
 | --- | --- |
 | `-l, --listen <ADDR>` | 监听地址（默认 `0.0.0.0:8443`） |
 | `-p, --password <PASSWORD>` | 共享密码（必填） |
-| `--cert <FILE>` / `--key <FILE>` | PEM 证书与私钥（可选） |
+| `--cert <FILE>` / `--key <FILE>` | PEM 证书与私钥（可选，未指定则自动生成） |
+| `--watch-cert` | 启用证书文件监听，自动热重载 |
+| `--show-cert-info` | 启动时显示证书详细信息 |
+| `--expiry-warning-days <DAYS>` | 证书到期告警阈值（默认 30 天） |
+| `-L, --log-level <LEVEL>` | 日志级别：error/warn/info/debug/trace（默认 info） |
 | `-I, --idle-session-check-interval <SECS>` | 推荐给客户端的检查间隔 |
 | `-T, --idle-session-timeout <SECS>` | 推荐空闲超时 |
 | `-M, --min-idle-session <COUNT>` | 推荐保持的空闲会话数 |
 | `-V, --version` | 显示版本信息 |
+| `-h, --help` | 显示帮助信息 |
+
+**信号处理**（Unix/Linux/macOS）：
+- `SIGHUP`: 手动触发证书重载（`kill -HUP <pid>` 或 `killall -HUP anytls-server`）
 
 ### anytls-client
 
@@ -130,10 +155,19 @@ anytls-rs/
 | `-s, --server <ADDR>` | 服务端地址（默认 `127.0.0.1:8443`） |
 | `-p, --password <PASSWORD>` | 共享密码（必填） |
 | `-H, --http-listen <ADDR>` | HTTP 代理监听地址（可选） |
+| `-L, --log-level <LEVEL>` | 日志级别：error/warn/info/debug/trace（默认 info） |
 | `-I, --idle-session-check-interval <SECS>` | 会话检查间隔（默认 30） |
 | `-T, --idle-session-timeout <SECS>` | 会话空闲超时（默认 60） |
 | `-M, --min-idle-session <COUNT>` | 预热空闲会话数（默认 1） |
 | `-V, --version` | 显示版本信息 |
+| `-h, --help` | 显示帮助信息 |
+
+**日志级别说明**：
+- `error`: 仅错误
+- `warn`: 错误 + 警告
+- `info`: 连接级别事件（生产推荐）
+- `debug`: 详细操作日志（排查问题）
+- `trace`: 最详细的协议级日志
 
 环境变量版本可在 `docs/01-dev-quickstart.md` 与 `scripts/dev-up.sh` 中查阅。
 

@@ -1,11 +1,11 @@
 # AnyTLS-RS
 
-[![Version](https://img.shields.io/badge/version-0.4.1-blue.svg)](https://github.com/jxo-me/anytls-rs)
+[![Version](https://img.shields.io/badge/version-0.5.2-blue.svg)](https://github.com/jxo-me/anytls-rs)
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
 [![Edition](https://img.shields.io/badge/edition-2024-blue.svg)](https://doc.rust-lang.org/edition-guide/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-High-performance and observable AnyTLS implementation in Rust, designed to mitigate TLS-in-TLS fingerprinting and interoperate with sing-box outbound → anytls-rs server setups.
+High-performance and observable AnyTLS implementation in Rust, designed to mitigate TLS-in-TLS fingerprinting and interoperate with sing-box outbound → anytls-rs server setups. Features TLS certificate hot-reloading and flexible logging control, ready for production deployment.
 
 [中文版](README.md)
 
@@ -16,6 +16,16 @@ High-performance and observable AnyTLS implementation in Rust, designed to mitig
 - **Multi-protocol proxy**: built-in SOCKS5 plus new HTTP CONNECT/plain proxy (`anytls-client -H/--http-listen`)
 - **Session pooling**: configurable idle check/timeout/warm-up via short flags (`-I/-T/-M`) and env vars
 - **UDP-over-TCP**: interoperable with sing-box v1.2, sends SYNACK immediately, covered by loopback tests
+- **TLS Certificate Hot-Reloading** ⭐:
+  - File watching for automatic reload (`--watch-cert`)
+  - SIGHUP signal for manual trigger (Unix/Linux/macOS)
+  - Zero-downtime atomic updates without dropping existing connections
+  - Certificate expiry monitoring and alerts (`--expiry-warning-days`)
+  - Detailed certificate info display (`--show-cert-info`)
+- **Flexible Logging Control** ⭐:
+  - Runtime-configurable log levels (`-L/--log-level`)
+  - Optimized log layering (info for connection events only, 70-80% less logs in production)
+  - Debug/Trace levels for detailed troubleshooting
 - **TLS management**: load existing PEM certs or auto-generate `anytls.local` self-signed pair (scripts handle it)
 - **Automation**: `scripts/dev-up.sh` for the fastest spin-up, `scripts/dev-verify.sh` for local regression
 - **Documentation**: project radar, developer quickstart, MVP plan, FAQ, ADR, troubleshooting, and more
@@ -46,12 +56,15 @@ Both scripts rely on `examples/singbox/certs/anytls.local.{crt,key}`. Override p
 ### 3. Manual walkthrough (two terminals)
 
 ```bash
-# Terminal A: anytls-server (self-signed by default, or use your own cert)
+# Terminal A: anytls-server (production-ready configuration)
 cargo run --release --bin anytls-server -- \
   -l 0.0.0.0:8443 \
   -p your_password \
   --cert ./examples/singbox/certs/anytls.local.crt \
   --key  ./examples/singbox/certs/anytls.local.key \
+  --watch-cert \
+  --expiry-warning-days 7 \
+  -L info \
   -I 30 -T 120 -M 1
 
 # Terminal B: anytls-client (SOCKS5 + HTTP proxy)
@@ -59,12 +72,16 @@ cargo run --release --bin anytls-client -- \
   -l 127.0.0.1:1080 \
   -s 127.0.0.1:8443 \
   -p your_password \
+  -L info \
   -I 30 -T 120 -M 1 \
   -H 127.0.0.1:8080
 
-# Terminal C: probe traffic
+# Terminal C: verify proxy functionality
 curl --socks5-hostname 127.0.0.1:1080 http://httpbin.org/get
 curl -x http://127.0.0.1:8080 http://httpbin.org/get
+
+# Hot-reload certificates (after updating cert files)
+killall -HUP anytls-server  # or send SIGHUP signal
 ```
 
 ---
@@ -115,11 +132,19 @@ For a responsibility-oriented overview, see `docs/00-project-radar.md`.
 | --- | --- |
 | `-l, --listen <ADDR>` | Listen address (default `0.0.0.0:8443`) |
 | `-p, --password <PASSWORD>` | Shared password (required) |
-| `--cert <FILE>` / `--key <FILE>` | PEM certificate/private key (optional) |
+| `--cert <FILE>` / `--key <FILE>` | PEM certificate/private key (optional, auto-generate if not specified) |
+| `--watch-cert` | Enable certificate file watching for automatic hot-reload |
+| `--show-cert-info` | Display detailed certificate information at startup |
+| `--expiry-warning-days <DAYS>` | Certificate expiry warning threshold (default 30 days) |
+| `-L, --log-level <LEVEL>` | Log level: error/warn/info/debug/trace (default info) |
 | `-I, --idle-session-check-interval <SECS>` | Hint for clients (recommended check interval) |
 | `-T, --idle-session-timeout <SECS>` | Hint for idle timeout |
 | `-M, --min-idle-session <COUNT>` | Hint for minimum warm idle sessions |
 | `-V, --version` | Show version information |
+| `-h, --help` | Show help message |
+
+**Signal Handling** (Unix/Linux/macOS):
+- `SIGHUP`: Manually trigger certificate reload (`kill -HUP <pid>` or `killall -HUP anytls-server`)
 
 ### anytls-client
 
@@ -129,10 +154,19 @@ For a responsibility-oriented overview, see `docs/00-project-radar.md`.
 | `-s, --server <ADDR>` | Server address (default `127.0.0.1:8443`) |
 | `-p, --password <PASSWORD>` | Shared password (required) |
 | `-H, --http-listen <ADDR>` | HTTP proxy bind (optional) |
+| `-L, --log-level <LEVEL>` | Log level: error/warn/info/debug/trace (default info) |
 | `-I, --idle-session-check-interval <SECS>` | Session check interval (default 30) |
 | `-T, --idle-session-timeout <SECS>` | Idle session timeout (default 60) |
 | `-M, --min-idle-session <COUNT>` | Warm idle sessions (default 1) |
 | `-V, --version` | Show version information |
+| `-h, --help` | Show help message |
+
+**Log Level Descriptions**:
+- `error`: Errors only
+- `warn`: Errors + warnings
+- `info`: Connection-level events (recommended for production)
+- `debug`: Detailed operation logs (for troubleshooting)
+- `trace`: Most verbose protocol-level logs
 
 Environment variable shortcuts (see `docs/01-dev-quickstart.md` and `scripts/dev-up.sh`):
 `IDLE_SESSION_CHECK_INTERVAL`, `IDLE_SESSION_TIMEOUT`, `MIN_IDLE_SESSION`, `HTTP_ADDR`, etc.
