@@ -3,7 +3,9 @@
 use anyhow::{Context, Result};
 use anytls_rs::padding::PaddingFactory;
 use anytls_rs::server::Server;
-use anytls_rs::util::{CertReloader, CertReloaderConfig, StringMap, create_server_config};
+use anytls_rs::util::{
+    CertReloader, CertReloaderConfig, StringMap, create_server_config, set_custom_dns_servers,
+};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -31,6 +33,7 @@ async fn main() -> Result<()> {
     let mut watch_cert = false;
     let mut show_cert_info = false;
     let mut expiry_warning_days: u64 = 30;
+    let mut dns_servers: Vec<String> = Vec::new();
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -94,6 +97,10 @@ async fn main() -> Result<()> {
                     .context("Expected days after --expiry-warning-days")?;
                 expiry_warning_days = parse_u64(&value, "--expiry-warning-days")?;
             }
+            "--dns" => {
+                let value = args.next().context("Expected DNS server after --dns")?;
+                dns_servers.extend(parse_dns_entries(&value));
+            }
             "-V" | "--version" => {
                 println!("{APP_NAME} {VERSION}");
                 return Ok(());
@@ -125,6 +132,9 @@ async fn main() -> Result<()> {
                 println!("      --show-cert-info      Display certificate information at startup");
                 println!(
                     "      --expiry-warning-days DAYS  Certificate expiry warning threshold (default: 30)"
+                );
+                println!(
+                    "      --dns SERVER           Custom DNS resolver (repeatable, comma-separated)"
                 );
                 #[cfg(unix)]
                 {
@@ -166,6 +176,13 @@ async fn main() -> Result<()> {
     } else {
         PaddingFactory::default()
     };
+
+    if !dns_servers.is_empty() {
+        set_custom_dns_servers(&dns_servers)
+            .await
+            .map_err(|err| anyhow::anyhow!("Failed to configure DNS resolver: {}", err))?;
+        info!("Custom DNS servers: {}", dns_servers.join(", "));
+    }
 
     info!("{APP_NAME} v{VERSION}");
 
@@ -309,4 +326,13 @@ fn parse_usize(value: &str, flag: &str) -> Result<usize> {
     value
         .parse::<usize>()
         .map_err(|e| anyhow::anyhow!("{} expects a non-negative integer: {}", flag, e))
+}
+
+fn parse_dns_entries(value: &str) -> Vec<String> {
+    value
+        .split([',', ';'])
+        .map(|entry| entry.trim())
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| entry.to_string())
+        .collect()
 }
