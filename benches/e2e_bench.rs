@@ -18,6 +18,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::UdpSocket;
 use tokio::time::{Duration, sleep, timeout};
+use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
 /// Mock async reader/writer for testing (not used, but kept for future use)
@@ -167,11 +168,13 @@ async fn udp_over_tcp_roundtrip(iterations: usize, payload_size: usize) -> Resul
         }
     });
 
-    let client_config = tls::create_client_config(None)?;
+    let client_config = tls::create_client_config()?;
     let tls_connector = Arc::new(TlsConnector::from(client_config));
+    let server_name = ServerName::try_from("localhost".to_string()).unwrap();
     let client = Arc::new(Client::new(
         password,
         server_addr.clone(),
+        server_name,
         tls_connector,
         PaddingFactory::default(),
     ));

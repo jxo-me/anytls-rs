@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::time::{Duration, timeout};
 
 /// Handler trait for processing new streams
 pub trait StreamHandler: Send + Sync {
@@ -260,9 +261,12 @@ async fn proxy_tcp_connection_with_synack_internal(
     // Resolve destination address
     let target_addr = format!("{}:{}", destination.addr, destination.port);
 
-    // Create outbound TCP connection
-    let outbound = match TcpStream::connect(&target_addr).await {
-        Ok(conn) => {
+    // Create outbound TCP connection with timeout
+    // Default 15s timeout for DNS resolution + TCP handshake
+    // This prevents hanging on slow/unreachable targets
+    let connect_timeout = Duration::from_secs(15);
+    let outbound = match timeout(connect_timeout, TcpStream::connect(&target_addr)).await {
+        Ok(Ok(conn)) => {
             tracing::info!(
                 "[Proxy] Successfully connected to {}:{}",
                 destination.addr,
@@ -270,7 +274,7 @@ async fn proxy_tcp_connection_with_synack_internal(
             );
             conn
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             tracing::error!("[Proxy] Failed to connect to {}: {}", target_addr, e);
             // Send SYNACK with error if protocol version >= 2
             // Note: All streams should receive SYNACK in protocol v2+, including stream_id=1
@@ -286,6 +290,23 @@ async fn proxy_tcp_connection_with_synack_internal(
                 "Failed to connect to {}: {}",
                 target_addr, e
             )));
+        }
+        Err(_) => {
+            let error_msg = format!(
+                "Connection timeout ({}s) to {}",
+                connect_timeout.as_secs(),
+                target_addr
+            );
+            tracing::error!("[Proxy] {}", error_msg);
+            // Send SYNACK with timeout error
+            if peer_version >= 2 {
+                let synack_frame =
+                    Frame::with_data(Command::SynAck, stream_id, Bytes::from(error_msg.clone()));
+                if let Err(send_err) = session.write_control_frame(synack_frame).await {
+                    tracing::error!("[Proxy] Failed to send SYNACK with error: {}", send_err);
+                }
+            }
+            return Err(AnyTlsError::Protocol(error_msg));
         }
     };
 

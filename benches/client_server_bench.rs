@@ -11,18 +11,21 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::sync::Arc;
 use tokio_rustls::TlsConnector;
+use tokio_rustls::rustls::pki_types::ServerName;
 
 fn bench_client_creation(c: &mut Criterion) {
     c.bench_function("client_creation", |b| {
         b.to_async(tokio::runtime::Runtime::new().unwrap())
             .iter(|| async {
-                let tls_config = tls::create_client_config(None).unwrap();
+                let tls_config = tls::create_client_config().unwrap();
                 let tls_connector = TlsConnector::from(tls_config);
                 let padding = PaddingFactory::default();
+                let server_name = ServerName::try_from("localhost".to_string()).unwrap();
 
                 let client = Client::new(
                     "test_password",
                     "localhost:8443".to_string(),
+                    server_name,
                     Arc::new(tls_connector),
                     padding,
                 );
@@ -38,7 +41,7 @@ fn bench_client_with_pool_config(c: &mut Criterion) {
     c.bench_function("client_with_pool_config", |b| {
         b.to_async(tokio::runtime::Runtime::new().unwrap())
             .iter(|| async {
-                let tls_config = tls::create_client_config(None).unwrap();
+                let tls_config = tls::create_client_config().unwrap();
                 let tls_connector = TlsConnector::from(tls_config);
                 let padding = PaddingFactory::default();
                 let pool_config = SessionPoolConfig {
@@ -46,10 +49,12 @@ fn bench_client_with_pool_config(c: &mut Criterion) {
                     idle_timeout: Duration::from_secs(60),
                     min_idle_sessions: 2,
                 };
+                let server_name = ServerName::try_from("localhost".to_string()).unwrap();
 
                 let client = Client::with_pool_config(
                     "test_password",
                     "localhost:8443".to_string(),
+                    server_name,
                     Arc::new(tls_connector),
                     padding,
                     pool_config,
@@ -62,7 +67,7 @@ fn bench_client_with_pool_config(c: &mut Criterion) {
 fn bench_tls_connector_creation(c: &mut Criterion) {
     c.bench_function("tls_connector_creation", |b| {
         b.iter(|| {
-            let tls_config = tls::create_client_config(None).unwrap();
+            let tls_config = tls::create_client_config().unwrap();
             let tls_connector = TlsConnector::from(tls_config);
             black_box(Arc::new(tls_connector));
         })
@@ -71,7 +76,7 @@ fn bench_tls_connector_creation(c: &mut Criterion) {
 
 fn bench_tls_connector_reuse(c: &mut Criterion) {
     c.bench_function("tls_connector_reuse", |b| {
-        let tls_config = tls::create_client_config(None).unwrap();
+        let tls_config = tls::create_client_config().unwrap();
         let tls_connector = Arc::new(TlsConnector::from(tls_config));
 
         b.iter(|| {
@@ -110,7 +115,7 @@ fn bench_client_server_setup_components(c: &mut Criterion) {
         b.iter(|| {
             // Create all necessary components for client/server setup
             let server_tls_config = tls::create_server_config().unwrap();
-            let client_tls_config = tls::create_client_config(None).unwrap();
+            let client_tls_config = tls::create_client_config().unwrap();
             let padding = PaddingFactory::default();
 
             black_box((server_tls_config, client_tls_config, padding));

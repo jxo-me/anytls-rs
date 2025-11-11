@@ -14,6 +14,7 @@ use tokio_rustls::rustls::pki_types::ServerName;
 pub struct Client {
     password_hash: [u8; 32],
     server_addr: String,
+    server_name: ServerName<'static>,
     tls_config: Arc<tokio_rustls::TlsConnector>,
     padding: Arc<PaddingFactory>,
     session_pool: Arc<SessionPool>,
@@ -25,12 +26,14 @@ impl Client {
     pub fn new(
         password: &str,
         server_addr: String,
+        server_name: ServerName<'static>,
         tls_config: Arc<tokio_rustls::TlsConnector>,
         padding: Arc<PaddingFactory>,
     ) -> Self {
         Self::with_pool_config(
             password,
             server_addr,
+            server_name,
             tls_config,
             padding,
             crate::client::SessionPoolConfig::default(),
@@ -41,6 +44,7 @@ impl Client {
     pub fn with_pool_config(
         password: &str,
         server_addr: String,
+        server_name: ServerName<'static>,
         tls_config: Arc<tokio_rustls::TlsConnector>,
         padding: Arc<PaddingFactory>,
         pool_config: crate::client::SessionPoolConfig,
@@ -53,6 +57,7 @@ impl Client {
         Self {
             password_hash,
             server_addr,
+            server_name,
             tls_config,
             padding,
             session_pool,
@@ -259,10 +264,11 @@ impl Client {
         );
 
         // Perform TLS handshake
-        let server_name = ServerName::try_from("localhost".to_string())
-            .map_err(|_| AnyTlsError::Tls("invalid server name".to_string()))?;
-
-        tracing::trace!("[Client] Starting TLS handshake");
+        let server_name = self.server_name.clone();
+        tracing::trace!(
+            "[Client] Starting TLS handshake using SNI {:?}",
+            server_name
+        );
         let tls_stream = self
             .tls_config
             .connect(server_name, tcp_stream)

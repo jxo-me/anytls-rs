@@ -123,6 +123,13 @@ async fn handle_connection(
         .peer_addr()
         .map(|a| a.to_string())
         .unwrap_or_else(|_| "unknown".to_string());
+    if let Err(e) = tcp_stream.set_nodelay(true) {
+        tracing::debug!(
+            "[Server] Failed to enable TCP_NODELAY for {}: {}",
+            peer_addr,
+            e
+        );
+    }
     let handshake_span = info_span!(
         "anytls.handshake",
         peer_addr = %peer_addr,

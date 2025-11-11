@@ -5,11 +5,13 @@ use anytls_rs::{
     server::Server,
     util::tls,
 };
+use std::net::IpAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, sleep};
+use tokio_rustls::rustls::pki_types::ServerName;
 
 /// Test configuration
 #[allow(dead_code)]
@@ -74,19 +76,56 @@ pub async fn create_test_client_with_config(
     config: &TestConfig,
     pool_config: SessionPoolConfig,
 ) -> anyhow::Result<Arc<Client>> {
-    let client_config = tls::create_client_config(None)?;
+    let client_config = tls::create_client_config()?;
     let tls_connector = Arc::new(tokio_rustls::TlsConnector::from(client_config));
     let padding = anytls_rs::padding::PaddingFactory::default();
+    let server_name = build_server_name(&config.server_addr)?;
 
     let client = Arc::new(Client::with_pool_config(
         &config.password,
         config.server_addr.clone(),
+        server_name,
         tls_connector,
         padding,
         pool_config,
     ));
 
     Ok(client)
+}
+
+fn build_server_name(addr: &str) -> anyhow::Result<ServerName<'static>> {
+    let trimmed = addr.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("Server address is empty");
+    }
+
+    let host_part = if trimmed.starts_with('[') {
+        trimmed
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .to_string()
+    } else if let Some(idx) = trimmed.rfind(':') {
+        let head = &trimmed[..idx];
+        if head.contains(':') && !trimmed.contains(']') {
+            // IPv6 literal without brackets
+            head.to_string()
+        } else {
+            head.trim().trim_matches('[').trim_matches(']').to_string()
+        }
+    } else {
+        trimmed.to_string()
+    };
+
+    if host_part.is_empty() {
+        anyhow::bail!("Server hostname could not be determined from '{}'", addr);
+    }
+
+    if let Ok(ip) = host_part.parse::<IpAddr>() {
+        Ok(ServerName::IpAddress(ip.into()))
+    } else {
+        ServerName::try_from(host_part.clone())
+            .map_err(|_| anyhow::anyhow!("Invalid DNS name for SNI: {}", host_part))
+    }
 }
 
 /// Wait for a condition to become true (with timeout)

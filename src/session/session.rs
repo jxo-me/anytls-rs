@@ -603,9 +603,9 @@ impl Session {
             }
             Command::Fin => {
                 // Stream close
-                tracing::info!(
+                tracing::debug!(
                     session_id = session_id,
-                    "[Session] 🔚 FIN received for stream {}, closing",
+                    "[Session] FIN received for stream {}, closing",
                     frame.stream_id
                 );
                 let mut streams = self.streams.write().await;

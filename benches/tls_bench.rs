@@ -38,7 +38,7 @@ fn bench_tls_create_server_config(c: &mut Criterion) {
 fn bench_tls_create_client_config(c: &mut Criterion) {
     c.bench_function("tls_create_client_config", |b| {
         b.iter(|| {
-            let result = tls::create_client_config(None);
+            let result = tls::create_client_config();
             let _ = black_box(result);
         })
     });
@@ -48,7 +48,7 @@ fn bench_tls_config_reuse(c: &mut Criterion) {
     c.bench_function("tls_config_reuse", |b| {
         // Create config once and reuse
         let server_config = tls::create_server_config().unwrap();
-        let client_config = tls::create_client_config(None).unwrap();
+        let client_config = tls::create_client_config().unwrap();
 
         b.iter(|| {
             black_box(&server_config);

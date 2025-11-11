@@ -156,7 +156,7 @@ impl rustls::client::danger::ServerCertVerifier for NoCertificateVerification {
 
 /// Create a client TLS config with insecure verification (for testing)
 /// This accepts self-signed certificates, similar to Go's InsecureSkipVerify: true
-pub fn create_client_config(_server_name: Option<String>) -> Result<Arc<ClientConfig>> {
+pub fn create_client_config() -> Result<Arc<ClientConfig>> {
     let root_store = RootCertStore::empty();
 
     // For testing, we'll accept any certificate
@@ -180,7 +180,7 @@ mod tests {
 
     #[test]
     fn test_create_client_config() {
-        let config = create_client_config(None).unwrap();
+        let config = create_client_config().unwrap();
         // Config should be created successfully
         assert!(Arc::strong_count(&config) >= 1);
     }

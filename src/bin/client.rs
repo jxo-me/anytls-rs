@@ -1,12 +1,14 @@
 //! AnyTLS Client binary
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use anytls_rs::client::{Client, SessionPoolConfig, start_http_proxy_server, start_socks5_server};
 use anytls_rs::padding::PaddingFactory;
 use anytls_rs::util::create_client_config;
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_rustls::TlsConnector;
+use tokio_rustls::rustls::pki_types::ServerName;
 use tracing::{error, info};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -116,9 +118,16 @@ async fn main() -> Result<()> {
 
     let password = password.context("Password is required (use -p or --password)")?;
 
+    // Determine effective SNI / server name
+    let effective_sni = match sni.as_deref() {
+        Some(value) if !value.trim().is_empty() => value.trim().to_string(),
+        _ => derive_sni_from_server_addr(&server_addr),
+    };
+    let server_name = build_server_name(&effective_sni)
+        .with_context(|| format!("Invalid SNI or server hostname '{}'", effective_sni))?;
+
     // Create TLS config
-    let client_config =
-        create_client_config(sni.clone()).context("Failed to create TLS client config")?;
+    let client_config = create_client_config().context("Failed to create TLS client config")?;
 
     // Create TLS connector
     let tls_connector = TlsConnector::from(client_config);
@@ -137,6 +146,7 @@ async fn main() -> Result<()> {
     }
 
     info!("{APP_NAME} v{VERSION}");
+    info!("TLS SNI host: {}", effective_sni);
     if let Some(http_addr) = http_listen_addr.as_ref() {
         info!(
             "SOCKS5 {} + HTTP {} => {}",
@@ -150,6 +160,7 @@ async fn main() -> Result<()> {
     let client = Arc::new(Client::with_pool_config(
         &password,
         server_addr,
+        server_name,
         Arc::new(tls_connector),
         padding,
         pool_config,
@@ -201,4 +212,42 @@ fn parse_usize(value: &str, flag: &str) -> Result<usize> {
     value
         .parse::<usize>()
         .map_err(|e| anyhow::anyhow!("{} expects a non-negative integer: {}", flag, e))
+}
+
+fn derive_sni_from_server_addr(addr: &str) -> String {
+    let trimmed = addr.trim();
+    if trimmed.starts_with('[')
+        && let Some(end) = trimmed.find(']')
+    {
+        return trimmed[1..end].to_string();
+    }
+
+    if let Some(idx) = trimmed.rfind(':') {
+        let host_part = &trimmed[..idx];
+        if host_part.contains(':') && !trimmed.contains(']') {
+            // Likely an IPv6 literal without brackets; return as-is
+            return trimmed.trim_matches('[').trim_matches(']').to_string();
+        }
+        return host_part
+            .trim()
+            .trim_matches('[')
+            .trim_matches(']')
+            .to_string();
+    }
+
+    trimmed.trim_matches('[').trim_matches(']').to_string()
+}
+
+fn build_server_name(value: &str) -> Result<ServerName<'static>> {
+    let normalized = value.trim().trim_matches('[').trim_matches(']');
+    if normalized.is_empty() {
+        return Err(anyhow!("Server name cannot be empty"));
+    }
+
+    if let Ok(ip) = normalized.parse::<IpAddr>() {
+        Ok(ServerName::IpAddress(ip.into()))
+    } else {
+        ServerName::try_from(normalized.to_string())
+            .map_err(|_| anyhow!("Invalid DNS name for SNI: {}", normalized))
+    }
 }

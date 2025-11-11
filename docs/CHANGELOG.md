@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file. Dates use `YYYY-MM-DD`.
 
+## [0.5.3] - 2025-11-11
+
+### Added
+- **Connection Timeout Protection**: Critical fix for slow/unreachable websites
+  - TCP connection timeout: 15 seconds (includes DNS resolution + TCP handshake)
+  - DNS resolution timeout: 10 seconds for UDP proxy
+  - Prevents indefinite hanging on DNS poisoning or unreachable targets
+  - Timeout errors are properly reported to clients via SYNACK frames
+
+### Fixed
+- **Major**: Server-side proxy connections no longer hang indefinitely
+  - Fixes YouTube, Google and other websites not loading or loading very slowly
+  - DNS resolution failures now fail fast (10s) instead of hanging forever
+  - Connection attempts to unreachable hosts timeout after 15s
+  - Resources are properly released after timeout
+- Improved error messages for timeout scenarios
+
+### Performance
+- Significantly improved responsiveness when accessing slow or unreachable websites
+- Reduced resource consumption by releasing blocked connections faster
+- Better concurrent connection handling due to timeout-based resource cleanup
+
+### Documentation
+- Added `docs/PROXY_TIMEOUT_OPTIMIZATION.md` with detailed problem analysis and solutions
+
 ## [0.5.2] - 2025-11-11
 
 ### Changed
