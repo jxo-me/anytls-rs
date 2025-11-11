@@ -2,9 +2,9 @@
 
 use crate::protocol::{Command, Frame};
 use crate::session::{Session, Stream};
-use crate::util::{AnyTlsError, Result};
+use crate::util::{AnyTlsError, Result, configure_tcp_stream, resolve_host_with_cache};
 use bytes::Bytes;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -258,28 +258,38 @@ async fn proxy_tcp_connection_with_synack_internal(
         destination.port
     );
 
-    // Resolve destination address
-    let target_addr = format!("{}:{}", destination.addr, destination.port);
+    let target_display = format!("{}:{}", destination.addr, destination.port);
+    let target_socket = if let Ok(ip) = destination.addr.parse::<IpAddr>() {
+        SocketAddr::new(ip, destination.port)
+    } else {
+        resolve_host_with_cache(&destination.addr, destination.port)
+            .await
+            .map_err(|err| {
+                tracing::error!(
+                    "[Proxy] DNS resolution failed for {}: {}",
+                    target_display,
+                    err
+                );
+                err
+            })?
+    };
 
     // Create outbound TCP connection with timeout
     // Default 15s timeout for DNS resolution + TCP handshake
     // This prevents hanging on slow/unreachable targets
     let connect_timeout = Duration::from_secs(15);
-    let outbound = match timeout(connect_timeout, TcpStream::connect(&target_addr)).await {
+    let outbound = match timeout(connect_timeout, TcpStream::connect(target_socket)).await {
         Ok(Ok(conn)) => {
-            tracing::info!(
-                "[Proxy] Successfully connected to {}:{}",
-                destination.addr,
-                destination.port
-            );
+            configure_tcp_stream(&conn, &target_display);
+            tracing::info!("[Proxy] Successfully connected to {}", target_display);
             conn
         }
         Ok(Err(e)) => {
-            tracing::error!("[Proxy] Failed to connect to {}: {}", target_addr, e);
+            tracing::error!("[Proxy] Failed to connect to {}: {}", target_display, e);
             // Send SYNACK with error if protocol version >= 2
             // Note: All streams should receive SYNACK in protocol v2+, including stream_id=1
             if peer_version >= 2 {
-                let error_msg = format!("Failed to connect to {}: {}", target_addr, e);
+                let error_msg = format!("Failed to connect to {}: {}", target_display, e);
                 let synack_frame =
                     Frame::with_data(Command::SynAck, stream_id, Bytes::from(error_msg));
                 if let Err(send_err) = session.write_control_frame(synack_frame).await {
@@ -288,14 +298,14 @@ async fn proxy_tcp_connection_with_synack_internal(
             }
             return Err(AnyTlsError::Protocol(format!(
                 "Failed to connect to {}: {}",
-                target_addr, e
+                target_display, e
             )));
         }
         Err(_) => {
             let error_msg = format!(
                 "Connection timeout ({}s) to {}",
                 connect_timeout.as_secs(),
-                target_addr
+                target_display
             );
             tracing::error!("[Proxy] {}", error_msg);
             // Send SYNACK with timeout error

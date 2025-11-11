@@ -3,7 +3,9 @@
 use crate::padding::PaddingFactory;
 use crate::server::handler::{StreamHandler, TcpProxyHandler};
 use crate::session::Session;
-use crate::util::{AnyTlsError, Result, StringMap, authenticate_client, hash_password};
+use crate::util::{
+    AnyTlsError, Result, StringMap, authenticate_client, configure_tcp_stream, hash_password,
+};
 use std::sync::{Arc, RwLock};
 use tokio::net::TcpListener;
 use tokio_rustls::TlsAcceptor;
@@ -123,13 +125,7 @@ async fn handle_connection(
         .peer_addr()
         .map(|a| a.to_string())
         .unwrap_or_else(|_| "unknown".to_string());
-    if let Err(e) = tcp_stream.set_nodelay(true) {
-        tracing::debug!(
-            "[Server] Failed to enable TCP_NODELAY for {}: {}",
-            peer_addr,
-            e
-        );
-    }
+    configure_tcp_stream(&tcp_stream, &peer_addr);
     let handshake_span = info_span!(
         "anytls.handshake",
         peer_addr = %peer_addr,

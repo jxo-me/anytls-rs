@@ -19,13 +19,12 @@
 //! Reference: <https://github.com/SagerNet/sing-box/blob/dev-next/docs/configuration/shared/udp-over-tcp.md>
 
 use crate::session::{Stream, StreamReader};
-use crate::util::{AnyTlsError, Result};
+use crate::util::{AnyTlsError, Result, resolve_host_with_cache};
 use bytes::{BufMut, Bytes, BytesMut};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::net::UdpSocket;
-use tokio::time::{Duration, timeout};
 use tracing::{field, info_span};
 
 const MAX_UDP_PACKET_SIZE: usize = 65535;
@@ -247,32 +246,8 @@ async fn read_initial_request(reader: &mut StreamReader) -> Result<SocketAddr> {
 
             let port = u16::from_be_bytes(port_buf);
 
-            // Resolve domain name with timeout
-            // Note: In a production environment, we might want to cache DNS results
-            let dns_timeout = Duration::from_secs(10);
-            let addr = match timeout(
-                dns_timeout,
-                tokio::net::lookup_host((domain.as_str(), port)),
-            )
-            .await
-            {
-                Ok(Ok(mut addrs)) => addrs.next().ok_or_else(|| {
-                    AnyTlsError::Protocol(format!("No address found for {}", domain))
-                })?,
-                Ok(Err(e)) => {
-                    return Err(AnyTlsError::Io(std::io::Error::other(format!(
-                        "DNS resolution failed for {}: {}",
-                        domain, e
-                    ))));
-                }
-                Err(_) => {
-                    return Err(AnyTlsError::Protocol(format!(
-                        "DNS resolution timeout ({}s) for {}",
-                        dns_timeout.as_secs(),
-                        domain
-                    )));
-                }
-            };
+            // Resolve domain name with caching and timeout
+            let addr = resolve_host_with_cache(&domain, port).await?;
 
             Ok(addr)
         }

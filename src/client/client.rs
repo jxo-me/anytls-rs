@@ -3,7 +3,7 @@
 use crate::client::{SessionPool, SessionPoolConfig};
 use crate::padding::PaddingFactory;
 use crate::session::{Session, SessionHeartbeatConfig};
-use crate::util::{AnyTlsError, Result, hash_password, send_authentication};
+use crate::util::{AnyTlsError, Result, configure_tcp_stream, hash_password, send_authentication};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use tokio::net::TcpStream;
@@ -258,6 +258,8 @@ impl Client {
                 return Err(AnyTlsError::Io(e));
             }
         };
+        configure_tcp_stream(&tcp_stream, &self.server_addr);
+
         tracing::debug!(
             "[Client] TCP connection established to {}",
             self.server_addr
