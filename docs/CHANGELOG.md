@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file. Dates use `YYYY-MM-DD`.
 
+## [0.5.4] - 2025-11-11
+
+### Added
+- **Network Stability Toolkit**
+  - Introduced `util::net::configure_tcp_stream` enabling `TCP_NODELAY` and keepalive hints for all client/server sockets
+  - Added `util::dns_cache::resolve_host_with_cache` to provide timed DNS caching with round-robin address selection
+
+### Changed
+- Client and server now automatically apply low-latency socket options after each successful `TcpStream::connect`
+- TCP/UDP proxy paths reuse the shared DNS cache, reducing repeated lookups and latency spikes on popular domains
+- Updated benchmarking/test helpers to accommodate new utilities
+
+### Fixed
+- Eliminated repeated DNS timeouts on high-traffic domains by combining caching with connection timeout handling
+- Resolved Clippy warnings by tightening stream configuration and DNS cache control flow
+
+
 ## [0.5.3] - 2025-11-11
 
 ### Added
