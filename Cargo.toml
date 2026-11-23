@@ -10,6 +10,7 @@ documentation = "https://docs.rs/anytls-rs"
 keywords = ["anytls", "tls", "proxy", "socks5", "security"]
 categories = ["network-programming", "cryptography", "asynchronous"]
 readme = "README.md"
+exclude = ["examples/singbox/certs/*.key"]
 
 [dependencies]
 # 异步运行时
