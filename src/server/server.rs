@@ -6,10 +6,21 @@ use crate::session::Session;
 use crate::util::{
     AnyTlsError, Result, StringMap, authenticate_client, configure_tcp_stream, hash_password,
 };
+use std::future::Future;
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 use tokio::net::TcpListener;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::time::timeout;
 use tokio_rustls::TlsAcceptor;
 use tracing::{Instrument, Span, field, info_span};
+
+/// Bound unauthenticated connections so slow handshakes cannot spawn unlimited tasks.
+const MAX_CONCURRENT_HANDSHAKES: usize = 128;
+const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
+const CLIENT_AUTH_TIMEOUT: Duration = Duration::from_secs(15);
+const ACCEPT_BACKOFF_MIN: Duration = Duration::from_millis(100);
+const ACCEPT_BACKOFF_MAX: Duration = Duration::from_secs(1);
 
 /// Server manages AnyTLS server connections
 pub struct Server {
@@ -69,12 +80,21 @@ impl Server {
     /// Start the server and listen for connections
     pub async fn listen(&self, addr: &str) -> Result<()> {
         let listener = TcpListener::bind(addr).await?;
+        let handshake_slots = Arc::new(Semaphore::new(MAX_CONCURRENT_HANDSHAKES));
+        let mut accept_backoff = ACCEPT_BACKOFF_MIN;
 
         tracing::info!("[Server] Listening on {}", addr);
 
         loop {
             match listener.accept().await {
                 Ok((stream, addr)) => {
+                    accept_backoff = ACCEPT_BACKOFF_MIN;
+                    let Some(handshake_permit) = try_acquire_handshake_permit(&handshake_slots)
+                    else {
+                        tracing::debug!(%addr, "Dropping connection: handshake limit reached");
+                        drop(stream);
+                        continue;
+                    };
                     let tls_config = self.tls_config.read().unwrap().clone();
                     let password_hash = self.password_hash;
                     let padding = Arc::clone(&self.padding);
@@ -95,6 +115,7 @@ impl Server {
                                 padding,
                                 on_new_stream,
                                 server_settings,
+                                handshake_permit,
                             )
                             .await
                             {
@@ -106,10 +127,33 @@ impl Server {
                 }
                 Err(e) => {
                     tracing::error!("[Server] Accept error: {}", e);
+                    tokio::time::sleep(accept_backoff).await;
+                    accept_backoff = next_accept_backoff(accept_backoff);
                 }
             }
         }
     }
+}
+
+fn try_acquire_handshake_permit(slots: &Arc<Semaphore>) -> Option<OwnedSemaphorePermit> {
+    Arc::clone(slots).try_acquire_owned().ok()
+}
+
+fn next_accept_backoff(current: Duration) -> Duration {
+    (current * 2).min(ACCEPT_BACKOFF_MAX)
+}
+
+async fn with_handshake_timeout<F, T, E>(duration: Duration, future: F, stage: &str) -> Result<T>
+where
+    F: Future<Output = std::result::Result<T, E>>,
+    E: Into<AnyTlsError>,
+{
+    timeout(duration, future)
+        .await
+        .map_err(|_| {
+            AnyTlsError::Protocol(format!("{} timed out after {}s", stage, duration.as_secs()))
+        })?
+        .map_err(Into::into)
 }
 
 /// Handle a single TCP connection
@@ -120,6 +164,7 @@ async fn handle_connection(
     padding: Arc<PaddingFactory>,
     on_new_stream: Option<Arc<dyn Fn(Arc<crate::session::Stream>) + Send + Sync + 'static>>,
     server_settings: Option<StringMap>,
+    handshake_permit: OwnedSemaphorePermit,
 ) -> Result<()> {
     let peer_addr = tcp_stream
         .peer_addr()
@@ -137,9 +182,20 @@ async fn handle_connection(
     tracing::info!("[Server] New connection from {}", peer_addr);
     // Perform TLS handshake
     tracing::debug!("[Server] Starting TLS handshake");
-    let tls_stream = tls_config.accept(tcp_stream).await.map_err(|e| {
-        tracing::error!("[Server] TLS handshake failed: {}", e);
-        AnyTlsError::Tls(format!("TLS handshake failed: {}", e))
+    let tls_stream = with_handshake_timeout(
+        TLS_HANDSHAKE_TIMEOUT,
+        async {
+            tls_config
+                .accept(tcp_stream)
+                .await
+                .map_err(|e| AnyTlsError::Tls(format!("TLS handshake failed: {}", e)))
+        },
+        "TLS handshake",
+    )
+    .await
+    .map_err(|error| {
+        tracing::error!("[Server] TLS handshake failed: {}", error);
+        error
     })?;
     tracing::debug!("[Server] TLS handshake successful");
     let (_, server_connection) = tls_stream.get_ref();
@@ -156,7 +212,13 @@ async fn handle_connection(
     // Authenticate client
     tracing::debug!("[Server] Authenticating client");
     let (mut reader, writer) = tokio::io::split(tls_stream);
-    authenticate_client(&mut reader, &password_hash, &padding).await?;
+    with_handshake_timeout(
+        CLIENT_AUTH_TIMEOUT,
+        authenticate_client(&mut reader, &password_hash, &padding),
+        "Client authentication",
+    )
+    .await?;
+    drop(handshake_permit);
     tracing::debug!("[Server] Client authenticated");
 
     // Create callback channel for new streams
@@ -304,4 +366,42 @@ async fn handle_connection(
     // In a production implementation, we'd wait for the session to close
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io;
+
+    #[test]
+    fn handshake_admission_is_bounded_and_released() {
+        let slots = Arc::new(Semaphore::new(1));
+        let permit = try_acquire_handshake_permit(&slots).unwrap();
+        assert!(try_acquire_handshake_permit(&slots).is_none());
+
+        drop(permit);
+        assert!(try_acquire_handshake_permit(&slots).is_some());
+    }
+
+    #[test]
+    fn accept_backoff_grows_to_a_bounded_maximum() {
+        let mut backoff = ACCEPT_BACKOFF_MIN;
+        for expected_ms in [200, 400, 800, 1000, 1000] {
+            backoff = next_accept_backoff(backoff);
+            assert_eq!(backoff, Duration::from_millis(expected_ms));
+        }
+    }
+
+    #[tokio::test]
+    async fn stalled_handshake_times_out() {
+        let error = with_handshake_timeout(
+            Duration::from_millis(1),
+            std::future::pending::<io::Result<()>>(),
+            "test handshake",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, AnyTlsError::Protocol(message) if message.contains("timed out")));
+    }
 }

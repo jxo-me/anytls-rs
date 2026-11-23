@@ -2,6 +2,8 @@ use bytes::Bytes;
 
 /// Frame header size: 1 (cmd) + 4 (stream_id) + 2 (data_len) = 7 bytes
 pub const HEADER_OVERHEAD_SIZE: usize = 7;
+/// Maximum payload length encoded by the frame header's unsigned 16-bit field.
+pub const MAX_FRAME_PAYLOAD_SIZE: usize = u16::MAX as usize;
 
 /// Command types for AnyTLS protocol frames
 #[repr(u8)]

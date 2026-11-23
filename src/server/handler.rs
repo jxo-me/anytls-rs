@@ -2,14 +2,15 @@
 
 use crate::protocol::{Command, Frame};
 use crate::session::{Session, Stream};
-use crate::util::{AnyTlsError, Result, configure_tcp_stream, resolve_host_with_cache};
+use crate::util::{AnyTlsError, Result, configure_tcp_stream, resolve_host_addresses_with_cache};
 use bytes::Bytes;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::time::{Duration, timeout};
+use tokio::task::JoinSet;
+use tokio::time::{Duration, Instant, sleep_until, timeout};
 
 /// Handler trait for processing new streams
 pub trait StreamHandler: Send + Sync {
@@ -259,26 +260,19 @@ async fn proxy_tcp_connection_with_synack_internal(
     );
 
     let target_display = format!("{}:{}", destination.addr, destination.port);
-    let target_socket = if let Ok(ip) = destination.addr.parse::<IpAddr>() {
-        SocketAddr::new(ip, destination.port)
-    } else {
-        resolve_host_with_cache(&destination.addr, destination.port)
-            .await
-            .map_err(|err| {
-                tracing::error!(
-                    "[Proxy] DNS resolution failed for {}: {}",
-                    target_display,
-                    err
-                );
-                err
-            })?
-    };
-
     // Create outbound TCP connection with timeout
     // Default 15s timeout for DNS resolution + TCP handshake
     // This prevents hanging on slow/unreachable targets
     let connect_timeout = Duration::from_secs(15);
-    let outbound = match timeout(connect_timeout, TcpStream::connect(target_socket)).await {
+    let connect = async {
+        let addresses = if let Ok(ip) = destination.addr.parse::<IpAddr>() {
+            vec![SocketAddr::new(ip, destination.port)]
+        } else {
+            resolve_host_addresses_with_cache(&destination.addr, destination.port).await?
+        };
+        connect_to_any(addresses).await.map_err(AnyTlsError::Io)
+    };
+    let outbound = match timeout(connect_timeout, connect).await {
         Ok(Ok(conn)) => {
             configure_tcp_stream(&conn, &target_display);
             tracing::info!("[Proxy] Successfully connected to {}", target_display);
@@ -342,6 +336,54 @@ async fn proxy_tcp_connection_with_synack_internal(
         stream_id
     );
     proxy_tcp_connection_data_forwarding(stream, outbound, destination).await
+}
+
+/// Connect to DNS candidates with a short stagger. A failed address is replaced
+/// immediately; a slow address does not prevent trying later IPv4/IPv6 results.
+async fn connect_to_any(addresses: Vec<SocketAddr>) -> std::io::Result<TcpStream> {
+    let mut addresses = addresses.into_iter();
+    let first = addresses.next().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "no destination addresses")
+    })?;
+    let mut attempts = JoinSet::new();
+    attempts.spawn(async move { TcpStream::connect(first).await });
+    let stagger = Duration::from_millis(250);
+    let mut next_launch = Instant::now() + stagger;
+    let mut last_error = None;
+
+    loop {
+        tokio::select! {
+            biased;
+            result = attempts.join_next() => {
+                let error = match result {
+                    Some(Ok(Ok(stream))) => return Ok(stream),
+                    Some(Ok(Err(error))) => error,
+                    Some(Err(error)) => std::io::Error::other(error),
+                    None => break,
+                };
+                last_error = Some(error);
+
+                if attempts.is_empty() {
+                    if let Some(address) = addresses.next() {
+                        attempts.spawn(async move { TcpStream::connect(address).await });
+                        next_launch = Instant::now() + stagger;
+                    } else {
+                        break;
+                    }
+                }
+            }
+            _ = sleep_until(next_launch), if addresses.len() > 0 => {
+                if let Some(address) = addresses.next() {
+                    attempts.spawn(async move { TcpStream::connect(address).await });
+                    next_launch += stagger;
+                }
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "no destination addresses")
+    }))
 }
 
 /// Forward data between stream and outbound connection
@@ -532,4 +574,27 @@ async fn proxy_tcp_connection_data_forwarding(
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn connect_to_any_tries_later_address_after_refusal() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let expected = listener.local_addr().unwrap();
+        let refused = "127.0.0.1:0".parse().unwrap();
+
+        let stream = timeout(
+            Duration::from_secs(2),
+            connect_to_any(vec![refused, expected]),
+        )
+        .await
+        .expect("connection attempts should finish promptly")
+        .expect("the later address should accept the connection");
+
+        assert_eq!(stream.peer_addr().unwrap(), expected);
+    }
 }

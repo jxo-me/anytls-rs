@@ -1,4 +1,4 @@
-use crate::protocol::frame::{Command, Frame, HEADER_OVERHEAD_SIZE};
+use crate::protocol::frame::{Command, Frame, HEADER_OVERHEAD_SIZE, MAX_FRAME_PAYLOAD_SIZE};
 use bytes::{BufMut, Bytes, BytesMut};
 use std::io;
 use tokio_util::codec::{Decoder, Encoder};
@@ -97,6 +97,12 @@ impl Encoder<Frame> for FrameCodec {
 
     fn encode(&mut self, item: Frame, dst: &mut BytesMut) -> Result<(), Self::Error> {
         let data_len = item.data.len();
+        if data_len > MAX_FRAME_PAYLOAD_SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("frame payload exceeds {} bytes", MAX_FRAME_PAYLOAD_SIZE),
+            ));
+        }
 
         // Reserve space: header + data
         dst.reserve(HEADER_OVERHEAD_SIZE + data_len);
@@ -118,6 +124,8 @@ impl Encoder<Frame> for FrameCodec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::frame::Command;
+    use bytes::Bytes;
 
     #[tokio::test]
     async fn test_encode_decode() {
@@ -131,6 +139,39 @@ mod tests {
         assert_eq!(decoded.cmd, frame.cmd);
         assert_eq!(decoded.stream_id, frame.stream_id);
         assert_eq!(decoded.data, frame.data);
+    }
+
+    #[test]
+    fn encode_accepts_maximum_payload_size() {
+        let mut codec = FrameCodec;
+        let frame = Frame::with_data(
+            Command::Push,
+            1,
+            Bytes::from(vec![0x5a; MAX_FRAME_PAYLOAD_SIZE]),
+        );
+        let mut buffer = BytesMut::new();
+
+        codec.encode(frame, &mut buffer).unwrap();
+
+        assert_eq!(buffer.len(), HEADER_OVERHEAD_SIZE + MAX_FRAME_PAYLOAD_SIZE);
+        assert_eq!(&buffer[5..7], &u16::MAX.to_be_bytes());
+    }
+
+    #[test]
+    fn encode_rejects_payload_larger_than_header_field_without_mutating_buffer() {
+        let mut codec = FrameCodec;
+        let frame = Frame::with_data(
+            Command::Push,
+            1,
+            Bytes::from(vec![0x5a; MAX_FRAME_PAYLOAD_SIZE + 1]),
+        );
+        let mut buffer = BytesMut::from(&b"existing"[..]);
+        let original = buffer.clone();
+
+        let error = codec.encode(frame, &mut buffer).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(buffer, original);
     }
 
     #[tokio::test]

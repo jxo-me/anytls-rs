@@ -71,7 +71,7 @@ impl CertReloader {
                 } else if info.is_expiring_soon(config.expiry_warning_days) {
                     warn!(
                         "[CertReloader] WARNING: Certificate expiring in {} days",
-                        info.days_until_expiry
+                        info.days_remaining()
                     );
                 }
             }
@@ -147,7 +147,7 @@ impl CertReloader {
             } else if new_cert_info.is_expiring_soon(self.config.expiry_warning_days) {
                 warn!(
                     "[CertReloader] WARNING: New certificate expiring in {} days",
-                    new_cert_info.days_until_expiry
+                    new_cert_info.days_remaining()
                 );
             }
         }
@@ -277,13 +277,13 @@ impl CertReloader {
                     } else if info.is_expiring_soon(self.config.expiry_warning_days) {
                         warn!(
                             "[CertReloader] WARNING: Certificate expiring in {} days! {}",
-                            info.days_until_expiry,
+                            info.days_remaining(),
                             info.summary()
                         );
                     } else {
                         debug!(
                             "[CertReloader] Certificate status: {} days until expiry",
-                            info.days_until_expiry
+                            info.days_remaining()
                         );
                     }
                 }

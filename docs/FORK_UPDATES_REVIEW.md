@@ -183,3 +183,10 @@ fork 的实现把 IP 与端口分开缓存，并设置 4096 条上限；proxy �
 4. **功能提案：**Android hook、mixed listener、outbound proxy、ring 后端分别依据产品需求讨论，不随修复补丁默认进入主线。
 
 合并前需逐个候选在上游当前代码上重新实现/移植；不能把 fork 的旧版 `Cargo.toml`、`Cargo.lock`、release workflow 或整文件覆盖带回主线。本次仅生成了本盘点文档，没有从 fork 合并代码，也未运行 fork 分支测试。
+
+## 主线开发进展
+
+- 已先将当时工作区提交为 `ee93c61`（Actions Node.js 24 升级和本盘点文档），然后从该提交建立 `fix/fork-review-mainline` 开发分支。
+- 已在开发分支实现 DNS IP-only cache、端口按请求附加、缓存条目上限、证书有效期实时计算、frame payload 长度校验、多地址 TCP fallback，以及 TLS/认证握手限额与超时、accept 错误退避。
+- 新增相应回归测试；`cargo test --all-features`（67 个单元测试及集成测试，共 90 项）、`cargo clippy --all-targets --all-features -- -D warnings`、`cargo fmt` 均已通过。
+- 这些开发分支改动仍待代码审阅和提交；fork 自身的 CI 与测试状态仍未在本机验证。

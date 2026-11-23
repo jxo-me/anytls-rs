@@ -17,13 +17,15 @@ use trust_dns_resolver::config::{NameServerConfig, Protocol, ResolverConfig, Res
 const DEFAULT_TTL: Duration = Duration::from_secs(60);
 /// Timeout for DNS lookup operations.
 const DNS_TIMEOUT: Duration = Duration::from_secs(10);
+/// Bound memory used by hostnames supplied by remote clients.
+const MAX_CACHE_ENTRIES: usize = 4096;
 
 static DNS_CACHE: Lazy<DnsCache> = Lazy::new(DnsCache::new);
 static DNS_RESOLVER: Lazy<RwLock<Option<Arc<TokioAsyncResolver>>>> =
     Lazy::new(|| RwLock::new(None));
 
 struct CacheEntry {
-    addresses: Vec<SocketAddr>,
+    addresses: Vec<IpAddr>,
     expires_at: Instant,
     next_index: usize,
 }
@@ -39,37 +41,55 @@ impl DnsCache {
         }
     }
 
-    async fn get(&self, host: &str) -> Option<SocketAddr> {
-        let cache = self.inner.read().await;
-        if let Some(entry) = cache.get(host)
-            && Instant::now() <= entry.expires_at
-            && !entry.addresses.is_empty()
+    async fn get(&self, host: &str, port: u16) -> Option<Vec<SocketAddr>> {
+        let mut cache = self.inner.write().await;
+        let now = Instant::now();
+        if cache
+            .get(host)
+            .is_some_and(|entry| now > entry.expires_at || entry.addresses.is_empty())
         {
-            let index = entry.next_index % entry.addresses.len();
-            let addr = entry.addresses[index];
-            trace!("[DNS] Cache hit for {} -> {}", host, addr);
-            return Some(addr);
+            cache.remove(host);
+            return None;
         }
-        None
+
+        let entry = cache.get_mut(host)?;
+        let index = entry.next_index % entry.addresses.len();
+        entry.next_index = (index + 1) % entry.addresses.len();
+        let addresses = entry.addresses[index..]
+            .iter()
+            .chain(&entry.addresses[..index])
+            .map(|ip| SocketAddr::new(*ip, port))
+            .collect::<Vec<_>>();
+        trace!(
+            "[DNS] Cache hit for {} -> {} addresses",
+            host,
+            addresses.len()
+        );
+        Some(addresses)
     }
 
-    async fn insert(&self, host: String, addresses: Vec<SocketAddr>) {
+    async fn insert(&self, host: String, addresses: Vec<IpAddr>) {
         let mut cache = self.inner.write().await;
+        if cache.len() >= MAX_CACHE_ENTRIES && !cache.contains_key(&host) {
+            let now = Instant::now();
+            cache.retain(|_, entry| entry.expires_at > now);
+            if cache.len() >= MAX_CACHE_ENTRIES
+                && let Some(oldest) = cache
+                    .iter()
+                    .min_by_key(|(_, entry)| entry.expires_at)
+                    .map(|(host, _)| host.clone())
+            {
+                cache.remove(&oldest);
+            }
+        }
         cache.insert(
             host,
             CacheEntry {
                 addresses,
                 expires_at: Instant::now() + DEFAULT_TTL,
-                next_index: 0,
+                next_index: 1,
             },
         );
-    }
-
-    async fn advance(&self, host: &str) {
-        let mut cache = self.inner.write().await;
-        if let Some(entry) = cache.get_mut(host) {
-            entry.next_index = entry.next_index.wrapping_add(1);
-        }
     }
 
     async fn clear(&self) {
@@ -80,17 +100,26 @@ impl DnsCache {
 
 /// Resolve a hostname with caching and timeout.
 pub async fn resolve_host_with_cache(host: &str, port: u16) -> Result<SocketAddr> {
+    resolve_host_addresses_with_cache(host, port)
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| AnyTlsError::Protocol(format!("No address found for {}", host)))
+}
+
+/// Resolve all candidate addresses, preserving the requested port and rotating
+/// the starting address on cache hits.
+pub async fn resolve_host_addresses_with_cache(host: &str, port: u16) -> Result<Vec<SocketAddr>> {
     if let Ok(ip) = host.parse::<IpAddr>() {
-        return Ok(SocketAddr::new(ip, port));
+        return Ok(vec![SocketAddr::new(ip, port)]);
     }
 
-    if let Some(addr) = DNS_CACHE.get(host).await {
-        DNS_CACHE.advance(host).await;
-        return Ok(addr);
+    if let Some(addresses) = DNS_CACHE.get(host, port).await {
+        return Ok(addresses);
     }
 
     let resolver_opt = DNS_RESOLVER.read().await.clone();
-    let mut addresses: Vec<SocketAddr> = if let Some(resolver) = resolver_opt {
+    let mut addresses: Vec<IpAddr> = if let Some(resolver) = resolver_opt {
         let lookup = tokio::time::timeout(DNS_TIMEOUT, resolver.lookup_ip(host))
             .await
             .map_err(|_| {
@@ -106,13 +135,9 @@ pub async fn resolve_host_with_cache(host: &str, port: u16) -> Result<SocketAddr
                     host, err
                 )))
             })?;
-        let mut addrs = Vec::new();
-        for ip in lookup.iter() {
-            addrs.push(SocketAddr::new(ip, port));
-        }
-        addrs
+        lookup.iter().collect()
     } else {
-        let lookup_future = lookup_host((host, port));
+        let lookup_future = lookup_host((host, 0));
         tokio::time::timeout(DNS_TIMEOUT, lookup_future)
             .await
             .map_err(|_| {
@@ -128,6 +153,7 @@ pub async fn resolve_host_with_cache(host: &str, port: u16) -> Result<SocketAddr
                     host, err
                 )))
             })?
+            .map(|addr| addr.ip())
             .collect::<Vec<_>>()
     };
 
@@ -139,10 +165,11 @@ pub async fn resolve_host_with_cache(host: &str, port: u16) -> Result<SocketAddr
     }
 
     // Sort to keep stability across runs (helps caching)
-    addresses.sort_unstable_by_key(|addr| match addr.ip() {
+    addresses.sort_unstable_by_key(|addr| match addr {
         IpAddr::V4(ip) => (0, ip.octets().to_vec()),
         IpAddr::V6(ip) => (1, ip.octets().to_vec()),
     });
+    addresses.dedup();
 
     debug!(
         "[DNS] Resolved {} -> {} entries (ttl={}s)",
@@ -152,8 +179,10 @@ pub async fn resolve_host_with_cache(host: &str, port: u16) -> Result<SocketAddr
     );
 
     DNS_CACHE.insert(host.to_string(), addresses.clone()).await;
-    DNS_CACHE.advance(host).await;
-    Ok(addresses[0])
+    Ok(addresses
+        .into_iter()
+        .map(|ip| SocketAddr::new(ip, port))
+        .collect())
 }
 
 pub async fn set_custom_dns_servers(servers: &[String]) -> Result<()> {
@@ -225,4 +254,60 @@ fn parse_dns_server(entry: &str) -> std::io::Result<SocketAddr> {
         ErrorKind::InvalidInput,
         format!("invalid DNS server '{}'", entry),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn cached_addresses_use_each_request_port() {
+        let cache = DnsCache::new();
+        cache
+            .insert(
+                "example.test".into(),
+                vec![IpAddr::V4("192.0.2.1".parse().unwrap())],
+            )
+            .await;
+
+        let http = cache.get("example.test", 80).await.unwrap();
+        let https = cache.get("example.test", 443).await.unwrap();
+        assert_eq!(http[0], "192.0.2.1:80".parse().unwrap());
+        assert_eq!(https[0], "192.0.2.1:443".parse().unwrap());
+    }
+
+    #[tokio::test]
+    async fn cache_rotates_all_addresses_and_keeps_ports() {
+        let cache = DnsCache::new();
+        cache
+            .insert(
+                "example.test".into(),
+                vec![
+                    IpAddr::V4("192.0.2.1".parse().unwrap()),
+                    IpAddr::V4("192.0.2.2".parse().unwrap()),
+                ],
+            )
+            .await;
+
+        let first = cache.get("example.test", 8080).await.unwrap();
+        let second = cache.get("example.test", 8080).await.unwrap();
+        assert_eq!(first[0].ip(), "192.0.2.2".parse::<IpAddr>().unwrap());
+        assert_eq!(second[0].ip(), "192.0.2.1".parse::<IpAddr>().unwrap());
+        assert!(first.iter().all(|address| address.port() == 8080));
+        assert!(second.iter().all(|address| address.port() == 8080));
+    }
+
+    #[tokio::test]
+    async fn cache_entry_count_is_bounded() {
+        let cache = DnsCache::new();
+        for index in 0..=MAX_CACHE_ENTRIES {
+            cache
+                .insert(
+                    format!("host-{index}.test"),
+                    vec!["127.0.0.1".parse().unwrap()],
+                )
+                .await;
+        }
+        assert_eq!(cache.inner.read().await.len(), MAX_CACHE_ENTRIES);
+    }
 }
