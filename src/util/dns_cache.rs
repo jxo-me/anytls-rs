@@ -1,6 +1,9 @@
 //! Simple async DNS cache to reduce repeated lookups for popular domains.
 
 use crate::util::{AnyTlsError, Result};
+use hickory_resolver::TokioResolver;
+use hickory_resolver::config::{ConnectionConfig, NameServerConfig, ResolverConfig};
+use hickory_resolver::net::runtime::TokioRuntimeProvider;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
@@ -10,8 +13,6 @@ use std::time::{Duration, Instant};
 use tokio::net::lookup_host;
 use tokio::sync::RwLock;
 use tracing::{debug, info, trace};
-use trust_dns_resolver::TokioAsyncResolver;
-use trust_dns_resolver::config::{NameServerConfig, Protocol, ResolverConfig, ResolverOpts};
 
 /// TTL for cached DNS entries.
 const DEFAULT_TTL: Duration = Duration::from_secs(60);
@@ -21,8 +22,7 @@ const DNS_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_CACHE_ENTRIES: usize = 4096;
 
 static DNS_CACHE: Lazy<DnsCache> = Lazy::new(DnsCache::new);
-static DNS_RESOLVER: Lazy<RwLock<Option<Arc<TokioAsyncResolver>>>> =
-    Lazy::new(|| RwLock::new(None));
+static DNS_RESOLVER: Lazy<RwLock<Option<Arc<TokioResolver>>>> = Lazy::new(|| RwLock::new(None));
 
 struct CacheEntry {
     addresses: Vec<IpAddr>,
@@ -202,13 +202,13 @@ pub async fn set_custom_dns_servers(servers: &[String]) -> Result<()> {
         return Ok(());
     }
 
-    let mut resolver_config = ResolverConfig::new();
-    for server in &parsed_servers {
-        resolver_config.add_name_server(NameServerConfig::new(*server, Protocol::Udp));
-        resolver_config.add_name_server(NameServerConfig::new(*server, Protocol::Tcp));
-    }
-
-    let resolver = TokioAsyncResolver::tokio(resolver_config, ResolverOpts::default());
+    let resolver_config = resolver_config_for_servers(&parsed_servers);
+    let resolver = hickory_resolver::Resolver::builder_with_config(
+        resolver_config,
+        TokioRuntimeProvider::default(),
+    )
+    .build()
+    .map_err(|err| AnyTlsError::Config(format!("Failed to create custom DNS resolver: {err}")))?;
     *resolver_guard = Some(Arc::new(resolver));
     DNS_CACHE.clear().await;
 
@@ -222,6 +222,21 @@ pub async fn set_custom_dns_servers(servers: &[String]) -> Result<()> {
     );
 
     Ok(())
+}
+
+fn resolver_config_for_servers(servers: &[SocketAddr]) -> ResolverConfig {
+    let name_servers = servers
+        .iter()
+        .map(|server| {
+            let mut udp = ConnectionConfig::udp();
+            udp.port = server.port();
+            let mut tcp = ConnectionConfig::tcp();
+            tcp.port = server.port();
+            NameServerConfig::new(server.ip(), true, vec![udp, tcp])
+        })
+        .collect();
+
+    ResolverConfig::from_name_servers(name_servers)
 }
 
 fn parse_dns_server(entry: &str) -> std::io::Result<SocketAddr> {
@@ -259,6 +274,38 @@ fn parse_dns_server(entry: &str) -> std::io::Result<SocketAddr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_resolver_config_preserves_server_ports_for_udp_and_tcp() {
+        let servers = [
+            "1.1.1.1:5353".parse().unwrap(),
+            "[2606:4700:4700::1111]:8053".parse().unwrap(),
+        ];
+        let (_, _, configured) = resolver_config_for_servers(&servers).into_parts();
+
+        assert_eq!(configured.len(), 2);
+        for (server, expected_ip, expected_port) in [
+            (
+                configured[0].clone(),
+                "1.1.1.1".parse::<IpAddr>().unwrap(),
+                5353,
+            ),
+            (
+                configured[1].clone(),
+                "2606:4700:4700::1111".parse::<IpAddr>().unwrap(),
+                8053,
+            ),
+        ] {
+            assert_eq!(server.ip, expected_ip);
+            assert_eq!(server.connections.len(), 2);
+            assert!(
+                server
+                    .connections
+                    .iter()
+                    .all(|connection| connection.port == expected_port)
+            );
+        }
+    }
 
     #[tokio::test]
     async fn cached_addresses_use_each_request_port() {

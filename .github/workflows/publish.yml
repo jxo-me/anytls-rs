@@ -1,8 +1,6 @@
 name: Publish to crates.io
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       version:
@@ -56,14 +54,15 @@ jobs:
           cargo package
       
       - name: Check version match
-        if: github.event_name == 'release'
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
         run: |
           VERSION=$(grep '^version =' Cargo.toml | sed 's/version = "\(.*\)"/\1/')
-          TAG_VERSION=${GITHUB_REF#refs/tags/v}
-          if [ "$VERSION" != "$TAG_VERSION" ]; then
-            echo "Error: Cargo.toml version ($VERSION) does not match tag version ($TAG_VERSION)"
+          if [ "$VERSION" != "$REQUESTED_VERSION" ]; then
+            echo "Error: Cargo.toml version ($VERSION) does not match requested version ($REQUESTED_VERSION)"
             exit 1
           fi
+          echo "Version matches: $VERSION"
       
       - name: Publish to crates.io
         env:
@@ -74,24 +73,4 @@ jobs:
             exit 1
           fi
           cargo publish --verbose
-      
-      - name: Create GitHub Release Notes
-        if: github.event_name == 'release'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const changelog = fs.readFileSync('docs/CHANGELOG.md', 'utf8');
-            // Extract version section from changelog
-            const version = process.env.GITHUB_REF.replace('refs/tags/v', '');
-            const versionRegex = new RegExp(`## \\[${version}\\][\\s\\S]*?(?=## \\[|$)`);
-            const match = changelog.match(versionRegex);
-            if (match) {
-              github.rest.repos.updateRelease({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                release_id: context.payload.release.id,
-                body: match[0]
-              });
-            }
 

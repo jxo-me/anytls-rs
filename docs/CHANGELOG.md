@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file. Dates use `YYYY-MM-DD`.
 
+## [0.5.6] - 2026-11-24
+
+### Fixed
+- DNS caching now retains multiple IP addresses per hostname, applies the requested port per connection, and rotates candidates; TCP connections can fall back to another resolved address.
+- Certificate validity summaries now use the current time and report accurate days remaining.
+- Protocol frame encoding rejects payloads larger than the wire format can represent.
+- Server handshakes now have concurrency and timeout limits, and transient accept errors use exponential backoff.
+
+### Security
+- Bounded unauthenticated handshakes to reduce resource exhaustion from slow or excessive client connections.
+- Upgraded DNS resolution to `idna` 1.x, fixing RUSTSEC-2024-0421.
+- Updated Hickory DNS and `time` to versions that include fixes for the advisories reported by `cargo audit`.
+
+### Changed
+- Replaced the unmaintained `trust-dns` resolver with maintained `hickory-resolver` and moved PEM parsing to `rustls-pki-types`.
+- Set the declared minimum Rust version to 1.88 to match the selected Hickory DNS release.
+- Removed the unused direct `serde` dependency.
+- Updated GitHub Actions to versions using the Node.js 24 runtime and documented reviewed fork updates.
+
 ## [0.5.5] - 2026-11-23
 
 ### Security

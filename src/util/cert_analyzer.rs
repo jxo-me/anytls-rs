@@ -1,8 +1,9 @@
 //! Certificate analysis and information extraction
 
 use crate::util::{AnyTlsError, Result};
+use rustls::pki_types::{CertificateDer, pem::PemObject};
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::Read;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use x509_parser::prelude::*;
@@ -70,9 +71,8 @@ impl CertificateInfo {
 
     /// Parse certificate from PEM bytes
     pub fn from_pem_bytes(pem_data: &[u8]) -> Result<Self> {
-        // Use rustls-pemfile to parse PEM
-        let mut reader = BufReader::new(pem_data);
-        let certs = rustls_pemfile::certs(&mut reader)
+        // Use the PEM parser maintained in rustls-pki-types.
+        let certs = CertificateDer::pem_slice_iter(pem_data)
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| AnyTlsError::Tls(format!("Failed to parse PEM certificates: {}", e)))?;
 
