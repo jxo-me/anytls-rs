@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file. Dates use `YYYY-MM-DD`.
 
+## [0.5.5] - 2026-11-23
+
+### Security
+- Replaced `chrono` with `jiff` in certificate validity formatting to remove the vulnerable `chrono` dependency (RUSTSEC-2026-0543).
+
 ## [0.5.4] - 2025-11-11
 
 ### Added

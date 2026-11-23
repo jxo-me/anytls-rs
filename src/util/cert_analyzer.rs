@@ -240,10 +240,11 @@ fn asn1_time_to_system_time(asn1_time: &ASN1Time) -> Result<SystemTime> {
 fn format_system_time(time: SystemTime) -> String {
     match time.duration_since(UNIX_EPOCH) {
         Ok(duration) => {
-            let secs = duration.as_secs();
-            let datetime = chrono::DateTime::from_timestamp(secs as i64, 0)
-                .unwrap_or(chrono::DateTime::UNIX_EPOCH);
-            datetime.format("%Y-%m-%d %H:%M:%S UTC").to_string()
+            let timestamp = i64::try_from(duration.as_secs())
+                .ok()
+                .and_then(|secs| jiff::Timestamp::from_second(secs).ok())
+                .unwrap_or(jiff::Timestamp::UNIX_EPOCH);
+            timestamp.strftime("%Y-%m-%d %H:%M:%S %Z").to_string()
         }
         Err(_) => "Invalid time".to_string(),
     }

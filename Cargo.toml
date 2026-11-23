@@ -1,6 +1,6 @@
 [package]
 name = "anytls-rs"
-version = "0.5.4"
+version = "0.5.5"
 edition = "2024"
 authors = ["Mickey <mickey@jxo.me>"]
 description = "Async TLS proxy with SOCKS5 support for privacy and security."
@@ -62,7 +62,7 @@ anyhow = "1.0.105"
 # 证书监控和分析
 notify = "9.0.0"
 x509-parser = "0.18.1"
-chrono = "0.4.45"
+jiff = { version = "1.0.2", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 tokio-test = "0.4.6"
