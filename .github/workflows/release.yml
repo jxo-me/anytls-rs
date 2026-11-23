@@ -310,7 +310,6 @@ jobs:
           path: checksums
           pattern: checksums-*
           merge-multiple: true
-          if-no-files-found: ignore
       
       - name: List artifacts
         run: |
@@ -388,7 +387,7 @@ jobs:
           echo "✅ Release notes generated"
       
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             artifacts/**/*
