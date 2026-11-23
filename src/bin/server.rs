@@ -247,17 +247,17 @@ async fn main() -> Result<()> {
         Server::new_with_reloadable_tls(&password, tls_acceptor_ref, padding, server_settings);
 
     // Start certificate file watching if enabled
-    if let Some(ref reloader) = cert_reloader
-        && watch_cert
-    {
-        let reloader_clone = reloader.clone();
-        if let Err(e) = reloader_clone.start_watching() {
-            warn!("[Server] Failed to start certificate file watching: {}", e);
-        } else {
-            info!("[Server] Certificate file watching enabled");
+    if let Some(ref reloader) = cert_reloader {
+        if watch_cert {
+            let reloader_clone = reloader.clone();
+            if let Err(e) = reloader_clone.start_watching() {
+                warn!("[Server] Failed to start certificate file watching: {}", e);
+            } else {
+                info!("[Server] Certificate file watching enabled");
+            }
         }
 
-        // Start expiry checker (check every hour)
+        // Expiry checks do not depend on whether filesystem watching is enabled.
         reloader
             .clone()
             .start_expiry_checker(Duration::from_secs(3600));

@@ -31,24 +31,13 @@ async fn test_heartbeat_end_to_end() {
     let server_session = Arc::new(Session::new_server(server_read, server_write, padding));
 
     // Start background tasks
-    let client_clone = client_session.clone();
-    tokio::spawn(async move {
-        if let Err(e) = client_clone.recv_loop().await {
-            tracing::error!("Client recv_loop error: {}", e);
-        }
-    });
+    client_session.clone().start_client().await.unwrap();
+    client_session.disable_buffering();
 
     let server_clone = server_session.clone();
     tokio::spawn(async move {
         if let Err(e) = server_clone.recv_loop().await {
             tracing::error!("Server recv_loop error: {}", e);
-        }
-    });
-
-    let client_clone2 = client_session.clone();
-    tokio::spawn(async move {
-        if let Err(e) = client_clone2.process_stream_data().await {
-            tracing::error!("Client process_stream_data error: {}", e);
         }
     });
 
@@ -115,17 +104,11 @@ async fn test_heartbeat_stress() {
     let server_session = Arc::new(Session::new_server(server_read, server_write, padding));
 
     // Start tasks
-    let client_clone = client_session.clone();
-    tokio::spawn(async move {
-        let _ = client_clone.recv_loop().await;
-    });
+    client_session.clone().start_client().await.unwrap();
+    client_session.disable_buffering();
     let server_clone = server_session.clone();
     tokio::spawn(async move {
         let _ = server_clone.recv_loop().await;
-    });
-    let client_clone2 = client_session.clone();
-    tokio::spawn(async move {
-        let _ = client_clone2.process_stream_data().await;
     });
     let server_clone2 = server_session.clone();
     tokio::spawn(async move {
@@ -180,17 +163,11 @@ async fn test_heartbeat_with_active_stream() {
     let server_session = Arc::new(Session::new_server(server_read, server_write, padding));
 
     // Start tasks
-    let client_clone = client_session.clone();
-    tokio::spawn(async move {
-        let _ = client_clone.recv_loop().await;
-    });
+    client_session.clone().start_client().await.unwrap();
+    client_session.disable_buffering();
     let server_clone = server_session.clone();
     tokio::spawn(async move {
         let _ = server_clone.recv_loop().await;
-    });
-    let client_clone2 = client_session.clone();
-    tokio::spawn(async move {
-        let _ = client_clone2.process_stream_data().await;
     });
     let server_clone2 = server_session.clone();
     tokio::spawn(async move {

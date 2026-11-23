@@ -17,6 +17,7 @@ use tracing::{Instrument, Span, field, info_span};
 
 /// Bound unauthenticated connections so slow handshakes cannot spawn unlimited tasks.
 const MAX_CONCURRENT_HANDSHAKES: usize = 128;
+const MAX_ACTIVE_CONNECTIONS: usize = 1024;
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 const CLIENT_AUTH_TIMEOUT: Duration = Duration::from_secs(15);
 const ACCEPT_BACKOFF_MIN: Duration = Duration::from_millis(100);
@@ -29,6 +30,15 @@ pub struct Server {
     padding: Arc<PaddingFactory>,
     on_new_stream: Option<Arc<dyn Fn(Arc<crate::session::Stream>) + Send + Sync + 'static>>,
     server_settings: Option<StringMap>,
+}
+
+struct ConnectionContext {
+    tls_config: Arc<TlsAcceptor>,
+    password_hash: [u8; 32],
+    padding: Arc<PaddingFactory>,
+    on_new_stream: Option<Arc<dyn Fn(Arc<crate::session::Stream>) + Send + Sync + 'static>>,
+    server_settings: Option<StringMap>,
+    active_slots: Arc<Semaphore>,
 }
 
 impl Server {
@@ -81,6 +91,7 @@ impl Server {
     pub async fn listen(&self, addr: &str) -> Result<()> {
         let listener = TcpListener::bind(addr).await?;
         let handshake_slots = Arc::new(Semaphore::new(MAX_CONCURRENT_HANDSHAKES));
+        let active_slots = Arc::new(Semaphore::new(MAX_ACTIVE_CONNECTIONS));
         let mut accept_backoff = ACCEPT_BACKOFF_MIN;
 
         tracing::info!("[Server] Listening on {}", addr);
@@ -100,6 +111,15 @@ impl Server {
                     let padding = Arc::clone(&self.padding);
                     let on_new_stream = self.on_new_stream.clone();
                     let server_settings = self.server_settings.clone();
+                    let active_slots = Arc::clone(&active_slots);
+                    let context = ConnectionContext {
+                        tls_config,
+                        password_hash,
+                        padding,
+                        on_new_stream,
+                        server_settings,
+                        active_slots,
+                    };
                     let span = info_span!(
                         "anytls.connection",
                         peer_addr = %addr,
@@ -108,16 +128,8 @@ impl Server {
 
                     tokio::spawn(
                         async move {
-                            if let Err(e) = handle_connection(
-                                stream,
-                                tls_config,
-                                password_hash,
-                                padding,
-                                on_new_stream,
-                                server_settings,
-                                handshake_permit,
-                            )
-                            .await
+                            if let Err(e) =
+                                handle_connection(stream, handshake_permit, context).await
                             {
                                 tracing::error!("[Server] Connection error: {}", e);
                             }
@@ -159,13 +171,17 @@ where
 /// Handle a single TCP connection
 async fn handle_connection(
     tcp_stream: tokio::net::TcpStream,
-    tls_config: Arc<TlsAcceptor>,
-    password_hash: [u8; 32],
-    padding: Arc<PaddingFactory>,
-    on_new_stream: Option<Arc<dyn Fn(Arc<crate::session::Stream>) + Send + Sync + 'static>>,
-    server_settings: Option<StringMap>,
     handshake_permit: OwnedSemaphorePermit,
+    context: ConnectionContext,
 ) -> Result<()> {
+    let ConnectionContext {
+        tls_config,
+        password_hash,
+        padding,
+        on_new_stream,
+        server_settings,
+        active_slots,
+    } = context;
     let peer_addr = tcp_stream
         .peer_addr()
         .map(|a| a.to_string())
@@ -219,6 +235,8 @@ async fn handle_connection(
     )
     .await?;
     drop(handshake_permit);
+    let active_permit = try_acquire_handshake_permit(&active_slots)
+        .ok_or_else(|| AnyTlsError::Protocol("maximum active connection limit reached".into()))?;
     tracing::debug!("[Server] Client authenticated");
 
     // Create callback channel for new streams
@@ -247,117 +265,91 @@ async fn handle_connection(
     // Handle new streams in a task
     if let Some(callback) = on_new_stream {
         tracing::debug!("[Server] Using custom stream callback");
+        let dispatcher_session = Arc::clone(&session);
         tokio::spawn(async move {
-            while let Some(stream) = stream_callback_rx.recv().await {
-                tracing::debug!(
-                    "[Server] Received stream {} in custom callback",
-                    stream.id()
-                );
-                // Spawn a new task for each stream to handle it asynchronously
-                let stream_clone = Arc::clone(&stream);
-                let callback_clone = Arc::clone(&callback);
-                let stream_id = stream_clone.id();
-                let stream_span =
-                    info_span!("anytls.stream.callback", session_id = session_id, stream_id);
-                tokio::spawn(
-                    async move {
-                        callback_clone(stream_clone);
+            let mut handlers = tokio::task::JoinSet::new();
+            loop {
+                tokio::select! {
+                    _ = dispatcher_session.closed() => break,
+                    stream = stream_callback_rx.recv() => {
+                        let Some(stream) = stream else { break };
+                        let callback = Arc::clone(&callback);
+                        let stream_id = stream.id();
+                        let span = info_span!("anytls.stream.callback", session_id, stream_id);
+                        handlers.spawn(async move { callback(stream) }.instrument(span));
                     }
-                    .instrument(stream_span),
-                );
+                    result = handlers.join_next(), if !handlers.is_empty() => {
+                        if let Some(Err(error)) = result {
+                            tracing::error!(session_id, "[Server] Stream callback task failed: {}", error);
+                        }
+                    }
+                }
             }
+            handlers.abort_all();
+            while handlers.join_next().await.is_some() {}
         });
     } else {
         // Use default TCP proxy handler if no callback is provided
         tracing::debug!("[Server] Using default TCP proxy handler");
         let session_for_handler = Arc::clone(&session);
         tokio::spawn(async move {
-            while let Some(stream) = stream_callback_rx.recv().await {
-                tracing::debug!(
-                    "[Server] Received stream {} for default handler",
-                    stream.id()
-                );
-                let stream_clone = Arc::clone(&stream);
-                let session_clone = Arc::clone(&session_for_handler);
-                // Create a new handler instance for each stream (TcpProxyHandler is small and stateless)
-                let handler = TcpProxyHandler::new();
-                let stream_id = stream_clone.id();
-                let stream_span = info_span!(
-                    "anytls.stream.proxy",
-                    session_id = session_clone.id(),
-                    stream_id
-                );
-                tokio::spawn(
-                    async move {
-                        if let Err(e) = handler.handle_stream(stream_clone, session_clone).await {
-                            tracing::error!("[Proxy] Handler error: {}", e);
+            let mut handlers = tokio::task::JoinSet::new();
+            loop {
+                tokio::select! {
+                    _ = session_for_handler.closed() => break,
+                    stream = stream_callback_rx.recv() => {
+                        let Some(stream) = stream else { break };
+                        let session = Arc::clone(&session_for_handler);
+                        let stream_id = stream.id();
+                        let span = info_span!("anytls.stream.proxy", session_id = session.id(), stream_id);
+                        handlers.spawn(async move {
+                            if let Err(error) = TcpProxyHandler::new().handle_stream(stream, session).await {
+                                tracing::error!("[Proxy] Handler error: {}", error);
+                            }
+                        }.instrument(span));
+                    }
+                    result = handlers.join_next(), if !handlers.is_empty() => {
+                        if let Some(Err(error)) = result {
+                            tracing::error!(session_id, "[Server] Stream handler task failed: {}", error);
                         }
                     }
-                    .instrument(stream_span),
-                );
+                }
             }
+            handlers.abort_all();
+            while handlers.join_next().await.is_some() {}
         });
     }
 
-    // Start receive loop
-    tracing::debug!("[Server] Starting receive loop");
-    let session_clone = Arc::clone(&session);
-    let recv_span = info_span!(
-        "anytls.session.recv_loop",
-        session_id = session_clone.id(),
-        peer_addr = %peer_addr
-    );
-    tokio::spawn(
-        async move {
-            tracing::debug!("[Server] recv_loop task spawned");
-            match session_clone.recv_loop().await {
-                Ok(()) => {
-                    tracing::debug!("[Server] recv_loop task completed normally");
+    // Supervise the transport loops together. If either side exits, close the
+    // session and cancel its sibling so the authenticated permit is released.
+    let mut transport_tasks = tokio::task::JoinSet::new();
+    let recv_session = Arc::clone(&session);
+    let recv_span =
+        info_span!("anytls.session.recv_loop", session_id = session_id, peer_addr = %peer_addr);
+    transport_tasks.spawn(async move { recv_session.recv_loop().await }.instrument(recv_span));
+    let process_session = Arc::clone(&session);
+    let process_span = info_span!("anytls.session.process_stream_data", session_id = session_id, peer_addr = %peer_addr);
+    transport_tasks
+        .spawn(async move { process_session.process_stream_data().await }.instrument(process_span));
+    tokio::spawn(async move {
+        let _active_permit = active_permit;
+        if let Some(result) = transport_tasks.join_next().await {
+            match result {
+                Err(error) => tracing::error!(
+                    session_id,
+                    "[Server] Session transport task panicked: {}",
+                    error
+                ),
+                Ok(Err(error)) => {
+                    tracing::debug!(session_id, "[Server] Session transport ended: {}", error)
                 }
-                Err(AnyTlsError::Io(e)) => {
-                    // Check if this is a close_notify error (normal connection close)
-                    let error_msg = e.to_string();
-                    if error_msg.contains("close_notify")
-                        || error_msg.contains("unexpected EOF")
-                        || e.kind() == std::io::ErrorKind::UnexpectedEof
-                    {
-                        tracing::debug!(
-                            "[Server] recv_loop task ended: Connection closed by client (no close_notify) - this is normal"
-                        );
-                    } else {
-                        tracing::error!("[Server] recv_loop task error: {}", e);
-                    }
-                }
-                Err(AnyTlsError::SessionClosed) => {
-                    tracing::debug!("[Server] recv_loop task ended: Session closed");
-                }
-                Err(e) => {
-                    tracing::error!("[Server] recv_loop task error: {}", e);
-                }
+                Ok(Ok(())) => {}
             }
         }
-        .instrument(recv_span),
-    );
-
-    // Start stream data processing
-    tracing::debug!("[Server] Starting stream data processing");
-    let session_clone = Arc::clone(&session);
-    let process_span = info_span!(
-        "anytls.session.process_stream_data",
-        session_id = session_clone.id(),
-        peer_addr = %peer_addr
-    );
-    tokio::spawn(
-        async move {
-            tracing::debug!("[Server] process_stream_data task spawned");
-            if let Err(e) = session_clone.process_stream_data().await {
-                tracing::error!("[Server] process_stream_data task error: {}", e);
-            } else {
-                tracing::debug!("[Server] process_stream_data task completed normally");
-            }
-        }
-        .instrument(process_span),
-    );
+        let _ = session.close().await;
+        transport_tasks.abort_all();
+        while transport_tasks.join_next().await.is_some() {}
+    });
 
     tracing::debug!("[Server] Connection handler setup complete");
 
@@ -379,6 +371,15 @@ mod tests {
         let permit = try_acquire_handshake_permit(&slots).unwrap();
         assert!(try_acquire_handshake_permit(&slots).is_none());
 
+        drop(permit);
+        assert!(try_acquire_handshake_permit(&slots).is_some());
+    }
+
+    #[test]
+    fn active_connection_admission_is_bounded_and_released() {
+        let slots = Arc::new(Semaphore::new(1));
+        let permit = try_acquire_handshake_permit(&slots).unwrap();
+        assert!(try_acquire_handshake_permit(&slots).is_none());
         drop(permit);
         assert!(try_acquire_handshake_permit(&slots).is_some());
     }

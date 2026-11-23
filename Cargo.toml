@@ -1,6 +1,6 @@
 [package]
 name = "anytls-rs"
-version = "0.5.6"
+version = "0.5.7"
 edition = "2024"
 rust-version = "1.88"
 authors = ["Mickey <mickey@jxo.me>"]

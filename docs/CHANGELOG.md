@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file. Dates use `YYYY-MM-DD`.
 
+## [0.5.7] - 2026-11-24
+
+### Fixed
+- UoT now supports legacy v1 and v2 connected/unconnected modes, including empty datagrams, peer filtering, dual-stack addressing, and truncated packet detection.
+- TCP streams now preserve queued data across peer FIN, propagate EOF and errors to waiters, fragment large writes into valid protocol frames, and supervise forwarding tasks.
+- Session and stream handling now validates Settings and stream IDs, bounds control writes, and performs reliable cancellation and close cleanup.
+- DNS and TCP proxy paths now try multiple resolved addresses and avoid retrying successfully transmitted UDP datagrams.
+- Certificate renewals are rejected when not yet valid or expired, while certificate validity is recalculated independently of file watching.
+- Oversized or malformed control frames are rejected, and server connection/transport tasks have bounded concurrency and cleanup.
+
 ## [0.5.6] - 2026-11-24
 
 ### Fixed

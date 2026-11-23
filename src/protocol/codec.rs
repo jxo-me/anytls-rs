@@ -1,4 +1,6 @@
-use crate::protocol::frame::{Command, Frame, HEADER_OVERHEAD_SIZE, MAX_FRAME_PAYLOAD_SIZE};
+use crate::protocol::frame::{
+    Command, Frame, HEADER_OVERHEAD_SIZE, MAX_CONTROL_PAYLOAD_SIZE, MAX_FRAME_PAYLOAD_SIZE,
+};
 use bytes::{BufMut, Bytes, BytesMut};
 use std::io;
 use tokio_util::codec::{Decoder, Encoder};
@@ -40,6 +42,19 @@ impl Decoder for FrameCodec {
         let cmd = Command::from(cmd_byte);
         let stream_id = header_reader.get_u32();
         let data_len = header_reader.get_u16() as usize;
+
+        if !command_allows_payload(cmd) && data_len != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "control command must not contain a payload",
+            ));
+        }
+        if cmd != Command::Push && data_len > MAX_CONTROL_PAYLOAD_SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("control payload exceeds {MAX_CONTROL_PAYLOAD_SIZE} bytes"),
+            ));
+        }
 
         tracing::debug!(
             "[FrameCodec] decode: Parsing header (buffer had {} bytes, preview: {})",
@@ -97,6 +112,18 @@ impl Encoder<Frame> for FrameCodec {
 
     fn encode(&mut self, item: Frame, dst: &mut BytesMut) -> Result<(), Self::Error> {
         let data_len = item.data.len();
+        if !command_allows_payload(item.cmd) && data_len != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "control command must not contain a payload",
+            ));
+        }
+        if item.cmd != Command::Push && data_len > MAX_CONTROL_PAYLOAD_SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("control payload exceeds {MAX_CONTROL_PAYLOAD_SIZE} bytes"),
+            ));
+        }
         if data_len > MAX_FRAME_PAYLOAD_SIZE {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -119,6 +146,19 @@ impl Encoder<Frame> for FrameCodec {
 
         Ok(())
     }
+}
+
+fn command_allows_payload(cmd: Command) -> bool {
+    matches!(
+        cmd,
+        Command::Waste
+            | Command::Push
+            | Command::Settings
+            | Command::Alert
+            | Command::UpdatePaddingScheme
+            | Command::SynAck
+            | Command::ServerSettings
+    )
 }
 
 #[cfg(test)]
@@ -172,6 +212,37 @@ mod tests {
 
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
         assert_eq!(buffer, original);
+    }
+
+    #[test]
+    fn encode_rejects_payload_on_empty_control_commands() {
+        let mut codec = FrameCodec;
+        let frame = Frame::with_data(Command::Syn, 1, Bytes::from_static(b"invalid"));
+        let error = codec.encode(frame, &mut BytesMut::new()).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn control_payload_is_bounded_on_encode_and_decode() {
+        let mut codec = FrameCodec;
+        let oversized = Bytes::from(vec![0x41; MAX_CONTROL_PAYLOAD_SIZE + 1]);
+        let frame = Frame::with_data(Command::Alert, 0, oversized);
+        assert_eq!(
+            codec
+                .encode(frame, &mut BytesMut::new())
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+
+        let mut wire = BytesMut::new();
+        wire.put_u8(Command::Alert.into());
+        wire.put_u32(0);
+        wire.put_u16((MAX_CONTROL_PAYLOAD_SIZE + 1) as u16);
+        assert_eq!(
+            codec.decode(&mut wire).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
     }
 
     #[tokio::test]

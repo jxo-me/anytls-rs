@@ -9,15 +9,21 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, Waker};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::{mpsc, oneshot};
 
-type PendingWrite = Pin<
+#[doc(hidden)]
+pub enum StreamCommand {
+    Data(u32, Bytes),
+    Fin(u32),
+}
+
+type PendingPermit = Pin<
     Box<
         dyn Future<
                 Output = std::result::Result<
-                    mpsc::OwnedPermit<(u32, Bytes)>,
+                    mpsc::OwnedPermit<StreamCommand>,
                     mpsc::error::SendError<()>,
                 >,
             > + Send,
@@ -34,14 +40,19 @@ pub struct Stream {
     reader: Arc<tokio::sync::Mutex<StreamReader>>,
 
     // ===== 写入部分：直接使用 channel，无需锁 =====
-    writer_tx: mpsc::Sender<(u32, Bytes)>,
-    pending_write: std::sync::Mutex<Option<PendingWrite>>,
+    writer_tx: mpsc::Sender<StreamCommand>,
+    pending_write: std::sync::Mutex<Option<PendingPermit>>,
+    pending_fin: std::sync::Mutex<Option<PendingPermit>>,
+    write_waker: std::sync::Mutex<Option<Waker>>,
+    read_waker: std::sync::Mutex<Option<Waker>>,
 
     // ===== SYNACK 通知 (用于超时检测) =====
     synack_tx: Arc<tokio::sync::Mutex<Option<oneshot::Sender<Result<()>>>>>,
 
     // ===== 状态管理 =====
     is_closed: Arc<AtomicBool>,
+    read_aborted: AtomicBool,
+    fin_sent: AtomicBool,
     close_error: Arc<tokio::sync::Mutex<Option<AnyTlsError>>>,
 }
 
@@ -58,7 +69,7 @@ impl Stream {
     pub fn new(
         id: u32,
         reader: StreamReader,
-        writer_tx: mpsc::Sender<(u32, Bytes)>,
+        writer_tx: mpsc::Sender<StreamCommand>,
     ) -> (Self, oneshot::Receiver<Result<()>>) {
         let (synack_tx, synack_rx) = oneshot::channel();
 
@@ -67,8 +78,13 @@ impl Stream {
             reader: Arc::new(tokio::sync::Mutex::new(reader)),
             writer_tx,
             pending_write: std::sync::Mutex::new(None),
+            pending_fin: std::sync::Mutex::new(None),
+            write_waker: std::sync::Mutex::new(None),
+            read_waker: std::sync::Mutex::new(None),
             synack_tx: Arc::new(tokio::sync::Mutex::new(Some(synack_tx))),
             is_closed: Arc::new(AtomicBool::new(false)),
+            read_aborted: AtomicBool::new(false),
+            fin_sent: AtomicBool::new(false),
             close_error: Arc::new(tokio::sync::Mutex::new(None)),
         };
 
@@ -118,6 +134,17 @@ impl Stream {
                 "[Stream] Closing stream with error"
             );
             *self.close_error.lock().await = Some(err);
+            self.read_aborted.store(true, Ordering::Release);
+            // A pending reserve owns a sender clone. Cancel it so removing the
+            // session's sender closes the reader channel after queued data drains.
+            *self.pending_write.lock().unwrap() = None;
+            *self.pending_fin.lock().unwrap() = None;
+            if let Some(waker) = self.read_waker.lock().unwrap().take() {
+                waker.wake();
+            }
+            if let Some(waker) = self.write_waker.lock().unwrap().take() {
+                waker.wake();
+            }
         }
     }
 
@@ -136,7 +163,16 @@ impl Stream {
         &self,
         data: Bytes,
     ) -> std::result::Result<(), mpsc::error::SendError<(u32, Bytes)>> {
-        self.writer_tx.send((self.id, data)).await
+        if self.is_closed.load(Ordering::Acquire) || self.read_aborted.load(Ordering::Acquire) {
+            return Err(mpsc::error::SendError((self.id, data)));
+        }
+        self.writer_tx
+            .send(StreamCommand::Data(self.id, data))
+            .await
+            .map_err(|error| match error.0 {
+                StreamCommand::Data(id, data) => mpsc::error::SendError((id, data)),
+                StreamCommand::Fin(_) => unreachable!("send_data only sends data"),
+            })
     }
 
     /// Try to send without waiting for queue capacity.
@@ -146,7 +182,34 @@ impl Stream {
         &self,
         data: Bytes,
     ) -> std::result::Result<(), mpsc::error::TrySendError<(u32, Bytes)>> {
-        self.writer_tx.try_send((self.id, data))
+        if self.is_closed.load(Ordering::Acquire) || self.read_aborted.load(Ordering::Acquire) {
+            return Err(mpsc::error::TrySendError::Closed((self.id, data)));
+        }
+        self.writer_tx
+            .try_send(StreamCommand::Data(self.id, data))
+            .map_err(|error| match error {
+                mpsc::error::TrySendError::Full(StreamCommand::Data(id, data)) => {
+                    mpsc::error::TrySendError::Full((id, data))
+                }
+                mpsc::error::TrySendError::Closed(StreamCommand::Data(id, data)) => {
+                    mpsc::error::TrySendError::Closed((id, data))
+                }
+                _ => unreachable!("try_send_data only sends data"),
+            })
+    }
+
+    /// Send a FIN after all previously queued stream data.
+    pub async fn send_fin(&self) -> std::result::Result<(), mpsc::error::SendError<StreamCommand>> {
+        if self.fin_sent.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        if self.read_aborted.load(Ordering::Acquire) {
+            return Err(mpsc::error::SendError(StreamCommand::Fin(self.id)));
+        }
+        self.writer_tx.send(StreamCommand::Fin(self.id)).await?;
+        self.fin_sent.store(true, Ordering::Release);
+        self.is_closed.store(true, Ordering::Release);
+        Ok(())
     }
 }
 
@@ -160,6 +223,13 @@ impl AsyncRead for Stream {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
         let stream_id = self.id;
+        if self.read_aborted.load(Ordering::Acquire) {
+            return Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "stream closed with error",
+            )));
+        }
+        *self.read_waker.lock().unwrap() = Some(cx.waker().clone());
         let remaining = buf.remaining();
 
         // 使用 tokio::task::block_in_place 同步读取
@@ -177,6 +247,7 @@ impl AsyncRead for Stream {
         // Poll the future
         match read_fut.as_mut().poll(cx) {
             Poll::Ready(Ok((n, temp_buf))) => {
+                self.read_waker.lock().unwrap().take();
                 if n > 0 {
                     buf.put_slice(&temp_buf[..n]);
                     tracing::trace!(
@@ -188,6 +259,7 @@ impl AsyncRead for Stream {
                 Poll::Ready(Ok(()))
             }
             Poll::Ready(Err(e)) => {
+                self.read_waker.lock().unwrap().take();
                 tracing::error!(
                     "[Stream] poll_read: Error reading (stream_id={}): {}",
                     stream_id,
@@ -230,6 +302,7 @@ impl AsyncWrite for Stream {
             stream_id
         );
         let this = self.as_mut().get_mut();
+        *this.write_waker.lock().unwrap() = Some(_cx.waker().clone());
         let mut pending_write = this.pending_write.lock().unwrap();
         if pending_write.is_none() {
             *pending_write = Some(Box::pin(this.writer_tx.clone().reserve_owned()));
@@ -237,7 +310,8 @@ impl AsyncWrite for Stream {
         match pending_write.as_mut().unwrap().as_mut().poll(_cx) {
             Poll::Ready(Ok(permit)) => {
                 *pending_write = None;
-                permit.send((this.id, data));
+                this.write_waker.lock().unwrap().take();
+                permit.send(StreamCommand::Data(this.id, data));
                 tracing::debug!(
                     "[Stream] poll_write: Successfully sent {} bytes to channel for stream {}",
                     buf_len,
@@ -266,10 +340,35 @@ impl AsyncWrite for Stream {
         Poll::Ready(Ok(()))
     }
 
-    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        // Mark as closed
-        self.is_closed.store(true, Ordering::Relaxed);
-        Poll::Ready(Ok(()))
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        let this = self.as_mut().get_mut();
+        if this.is_closed.load(Ordering::Acquire) {
+            return Poll::Ready(Ok(()));
+        }
+        *this.write_waker.lock().unwrap() = Some(cx.waker().clone());
+        let mut pending_fin = this.pending_fin.lock().unwrap();
+        if pending_fin.is_none() {
+            *pending_fin = Some(Box::pin(this.writer_tx.clone().reserve_owned()));
+        }
+        match pending_fin.as_mut().unwrap().as_mut().poll(cx) {
+            Poll::Ready(Ok(permit)) => {
+                *pending_fin = None;
+                permit.send(StreamCommand::Fin(this.id));
+                this.fin_sent.store(true, Ordering::Release);
+                this.is_closed.store(true, Ordering::Release);
+                this.write_waker.lock().unwrap().take();
+                Poll::Ready(Ok(()))
+            }
+            Poll::Ready(Err(_)) => {
+                *pending_fin = None;
+                this.is_closed.store(true, Ordering::Release);
+                Poll::Ready(Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "session channel closed",
+                )))
+            }
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
 
@@ -291,7 +390,9 @@ mod tests {
         stream.write_all(b"hello").await.unwrap();
 
         // 验证数据发送到 channel
-        let (stream_id, data) = rx.recv().await.unwrap();
+        let StreamCommand::Data(stream_id, data) = rx.recv().await.unwrap() else {
+            panic!("expected stream data command");
+        };
         assert_eq!(stream_id, 1);
         assert_eq!(data.as_ref(), b"hello");
     }
@@ -313,11 +414,15 @@ mod tests {
             "write should wait for queue capacity"
         );
 
-        let (id, first) = rx.recv().await.unwrap();
+        let StreamCommand::Data(id, first) = rx.recv().await.unwrap() else {
+            panic!("expected first stream data command");
+        };
         assert_eq!(id, 1);
         assert_eq!(first.as_ref(), b"first");
         blocked.await.unwrap();
-        let (id, second) = rx.recv().await.unwrap();
+        let StreamCommand::Data(id, second) = rx.recv().await.unwrap() else {
+            panic!("expected second stream data command");
+        };
         assert_eq!(id, 1);
         assert_eq!(second.as_ref(), b"second");
     }
@@ -360,8 +465,27 @@ mod tests {
         assert_eq!(&buf[..n], b"input");
 
         // 验证写入
-        let (stream_id, data) = rx.recv().await.unwrap();
+        let StreamCommand::Data(stream_id, data) = rx.recv().await.unwrap() else {
+            panic!("expected stream data command");
+        };
         assert_eq!(stream_id, 1);
         assert_eq!(data.as_ref(), b"output");
+    }
+
+    #[tokio::test]
+    async fn shutdown_enqueues_fin_after_prior_stream_data() {
+        let (tx, mut rx) = mpsc::channel(2);
+        let (_reader_tx, reader_rx) = mpsc::channel(1);
+        let reader = StreamReader::new(4, reader_rx);
+        let (mut stream, _synack_rx) = Stream::new(4, reader, tx);
+
+        stream.write_all(b"tail").await.unwrap();
+        stream.shutdown().await.unwrap();
+
+        assert!(matches!(
+            rx.recv().await,
+            Some(StreamCommand::Data(4, data)) if data == Bytes::from_static(b"tail")
+        ));
+        assert!(matches!(rx.recv().await, Some(StreamCommand::Fin(4))));
     }
 }

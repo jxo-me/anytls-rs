@@ -21,7 +21,7 @@
 //! Reference: <https://github.com/SagerNet/sing-box/blob/dev-next/docs/configuration/shared/udp-over-tcp.md>
 
 use crate::session::{Stream, StreamReader};
-use crate::util::{AnyTlsError, Result, resolve_host_with_cache};
+use crate::util::{AnyTlsError, Result, resolve_host_addresses_with_cache};
 use bytes::{BufMut, Bytes, BytesMut};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -43,7 +43,7 @@ const MAX_UDP_PACKET_SIZE: usize = 65535;
 /// 3. Bidirectional forwarding between Stream and UDP socket
 ///
 /// Reference: <https://github.com/SagerNet/sing-box/blob/dev-next/docs/configuration/shared/udp-over-tcp.md>
-pub async fn handle_udp_over_tcp(stream: Arc<Stream>) -> Result<()> {
+pub async fn handle_udp_over_tcp(stream: Arc<Stream>, legacy_v1: bool) -> Result<()> {
     let stream_id = stream.id();
     let udp_span = info_span!(
         "anytls.udp.proxy",
@@ -64,13 +64,23 @@ pub async fn handle_udp_over_tcp(stream: Arc<Stream>) -> Result<()> {
 
     // Step 1: Read initial request (contains target address)
     // Format: SOCKS5 address (ATYP + Address + Port)
-    let (is_connect, target_addr) = match read_initial_request(&mut reader_guard).await {
-        Ok(addr) => addr,
-        Err(e) => {
-            tracing::error!("[UDP] Failed to read initial request: {}", e);
-            return Err(e);
+    let (is_connect, mut target_addresses) = if legacy_v1 {
+        (
+            false,
+            vec!["0.0.0.0:0".parse().expect("valid unspecified address")],
+        )
+    } else {
+        match read_initial_request(&mut reader_guard).await {
+            Ok(addr) => addr,
+            Err(e) => {
+                tracing::error!("[UDP] Failed to read initial request: {}", e);
+                return Err(e);
+            }
         }
     };
+    let target_addr = *target_addresses
+        .first()
+        .ok_or_else(|| AnyTlsError::Protocol("UDP target resolved to no addresses".into()))?;
     udp_span.record("target", field::display(target_addr));
 
     tracing::debug!("[UDP] Target UDP address: {}", target_addr);
@@ -78,10 +88,14 @@ pub async fn handle_udp_over_tcp(stream: Arc<Stream>) -> Result<()> {
     drop(reader_guard);
 
     // Step 2: Create UDP socket (bind to any available port)
-    let udp_socket = UdpSocket::bind("0.0.0.0:0").await.map_err(|e| {
+    let udp_socket = bind_dual_stack_udp().await.map_err(|e| {
         tracing::error!("[UDP] Failed to create UDP socket: {}", e);
         AnyTlsError::Io(e)
     })?;
+
+    if is_connect {
+        target_addresses = connect_udp_to_any(&udp_socket, &target_addresses).await?;
+    }
 
     let local_addr = udp_socket.local_addr()?;
     tracing::debug!("[UDP] Created UDP socket on {}", local_addr);
@@ -101,7 +115,7 @@ pub async fn handle_udp_over_tcp(stream: Arc<Stream>) -> Result<()> {
             &stream,
             &udp_socket,
             is_connect,
-            &target_addr,
+            &target_addresses,
             Arc::clone(&packets_stream_to_udp),
             Arc::clone(&bytes_stream_to_udp)
         ) => {
@@ -151,7 +165,7 @@ pub async fn handle_udp_over_tcp(stream: Arc<Stream>) -> Result<()> {
 /// ```
 ///
 /// Returns the target SocketAddr
-async fn read_initial_request(reader: &mut StreamReader) -> Result<(bool, SocketAddr)> {
+async fn read_initial_request(reader: &mut StreamReader) -> Result<(bool, Vec<SocketAddr>)> {
     // Read isConnect (1 byte)
     let mut is_connect_buf = [0u8; 1];
     reader
@@ -197,7 +211,7 @@ async fn read_initial_request(reader: &mut StreamReader) -> Result<(bool, Socket
             let ip = std::net::Ipv4Addr::from(ip_buf);
             let port = u16::from_be_bytes(port_buf);
 
-            Ok((is_connect == 1, SocketAddr::from((ip, port))))
+            Ok((is_connect == 1, vec![SocketAddr::from((ip, port))]))
         }
         0x04 => {
             // IPv6: 16 bytes IP + 2 bytes port
@@ -216,7 +230,7 @@ async fn read_initial_request(reader: &mut StreamReader) -> Result<(bool, Socket
             let ip = std::net::Ipv6Addr::from(ip_buf);
             let port = u16::from_be_bytes(port_buf);
 
-            Ok((is_connect == 1, SocketAddr::from((ip, port))))
+            Ok((is_connect == 1, vec![SocketAddr::from((ip, port))]))
         }
         0x03 => {
             // Domain: length (1 byte) + domain + 2 bytes port
@@ -249,9 +263,9 @@ async fn read_initial_request(reader: &mut StreamReader) -> Result<(bool, Socket
             let port = u16::from_be_bytes(port_buf);
 
             // Resolve domain name with caching and timeout
-            let addr = resolve_host_with_cache(&domain, port).await?;
+            let addresses = resolve_host_addresses_with_cache(&domain, port).await?;
 
-            Ok((is_connect == 1, addr))
+            Ok((is_connect == 1, addresses))
         }
         _ => Err(AnyTlsError::Protocol(format!(
             "Unknown address type: {}",
@@ -267,7 +281,7 @@ async fn stream_to_udp(
     stream: &Stream,
     udp: &UdpSocket,
     is_connect: bool,
-    target_addr: &SocketAddr,
+    target_addrs: &[SocketAddr],
     packets_counter: Arc<AtomicU64>,
     bytes_counter: Arc<AtomicU64>,
 ) -> Result<()> {
@@ -282,7 +296,7 @@ async fn stream_to_udp(
         let (packet_target, payload) = match if is_connect {
             read_udp_packet(&mut reader_guard)
                 .await
-                .map(|payload| (*target_addr, payload))
+                .map(|payload| (target_addrs.to_vec(), payload))
         } else {
             read_udp_packet_non_connect(&mut reader_guard).await
         } {
@@ -297,19 +311,21 @@ async fn stream_to_udp(
             }
         };
 
-        if payload.is_empty() {
-            tracing::debug!("[UDP] Empty packet, stream might be closed");
-            break;
-        }
-
         tracing::trace!(
             "[UDP] Stream → UDP: {} bytes to {}",
             payload.len(),
-            target_addr
+            target_addrs
+                .first()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "<none>".into())
         );
 
         // Send to UDP (target address already known from initial request)
-        let sent = udp.send_to(&payload, packet_target).await?;
+        let sent = if is_connect {
+            send_udp_connected_candidates(udp, &payload, &packet_target).await?
+        } else {
+            send_udp_to_candidates(udp, &payload, &packet_target).await?
+        };
 
         if sent != payload.len() {
             tracing::warn!("[UDP] Partial UDP send: {} / {} bytes", sent, payload.len());
@@ -335,17 +351,22 @@ async fn udp_to_stream(
 
     tracing::debug!("[UDP] UDP → Stream task started for stream {}", stream_id);
 
-    let mut buf = vec![0u8; MAX_UDP_PACKET_SIZE];
+    let mut buf = vec![0u8; MAX_UDP_PACKET_SIZE + 1];
 
     loop {
         // Receive from UDP
         let (len, addr) = match udp.recv_from(&mut buf).await {
-            Ok((len, addr)) => (len, addr),
+            Ok((len, addr)) => (len, normalize_v4_mapped(addr)),
             Err(e) => {
                 tracing::error!("[UDP] Failed to receive from UDP: {}", e);
                 return Err(AnyTlsError::Io(e));
             }
         };
+        if len > MAX_UDP_PACKET_SIZE {
+            return Err(AnyTlsError::Protocol(
+                "truncated or oversized UDP datagram".into(),
+            ));
+        }
 
         tracing::trace!("[UDP] UDP → Stream: {} bytes from {}", len, addr);
 
@@ -402,7 +423,9 @@ async fn read_udp_packet(reader: &mut StreamReader) -> Result<Vec<u8>> {
 }
 
 /// Read one non-connect UoT v2 packet: address, port, length, payload.
-async fn read_udp_packet_non_connect(reader: &mut StreamReader) -> Result<(SocketAddr, Vec<u8>)> {
+async fn read_udp_packet_non_connect(
+    reader: &mut StreamReader,
+) -> Result<(Vec<SocketAddr>, Vec<u8>)> {
     let mut atyp_buf = [0u8; 1];
     reader
         .read_exact(&mut atyp_buf)
@@ -445,12 +468,116 @@ async fn read_udp_packet_non_connect(reader: &mut StreamReader) -> Result<(Socke
         .await
         .map_err(AnyTlsError::Io)?;
     let port = u16::from_be_bytes(port_buf);
-    let addr = resolve_host_with_cache(&host, port).await?;
+    let addresses = resolve_host_addresses_with_cache(&host, port).await?;
     let payload = read_udp_packet(reader).await?;
-    if payload.is_empty() {
-        return Err(AnyTlsError::Protocol("Empty UDP packet".into()));
+    Ok((addresses, payload))
+}
+
+/// Try candidate addresses only after an immediate local `send_to` error.
+/// A successful datagram is never resent, preserving UDP's at-most-once behavior.
+async fn send_udp_to_candidates(
+    udp: &UdpSocket,
+    payload: &[u8],
+    candidates: &[SocketAddr],
+) -> std::io::Result<usize> {
+    let mut last_error = None;
+    let local = udp.local_addr()?;
+    for address in candidates {
+        let address = map_v4_for_dual_stack(*address, local);
+        match udp.send_to(payload, address).await {
+            Ok(sent) => return Ok(sent),
+            Err(error) => last_error = Some(error),
+        }
     }
-    Ok((addr, payload))
+    Err(last_error.unwrap_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "no UDP destination addresses")
+    }))
+}
+
+async fn connect_udp_to_any(
+    udp: &UdpSocket,
+    candidates: &[SocketAddr],
+) -> std::io::Result<Vec<SocketAddr>> {
+    let local = udp.local_addr()?;
+    let mut last_error = None;
+    for (index, address) in candidates.iter().enumerate() {
+        match udp.connect(map_v4_for_dual_stack(*address, local)).await {
+            Ok(()) => {
+                return Ok(candidates[index..]
+                    .iter()
+                    .chain(&candidates[..index])
+                    .copied()
+                    .collect());
+            }
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "no UDP destination addresses")
+    }))
+}
+
+async fn send_udp_connected_candidates(
+    udp: &UdpSocket,
+    payload: &[u8],
+    candidates: &[SocketAddr],
+) -> std::io::Result<usize> {
+    let local = udp.local_addr()?;
+    let mut last_error = None;
+    for address in candidates {
+        if let Err(error) = udp.connect(map_v4_for_dual_stack(*address, local)).await {
+            last_error = Some(error);
+            continue;
+        }
+        match udp.send(payload).await {
+            Ok(sent) => return Ok(sent),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "no UDP destination addresses")
+    }))
+}
+
+async fn bind_dual_stack_udp() -> std::io::Result<UdpSocket> {
+    use socket2::{Domain, Protocol, SockAddr, Socket, Type};
+
+    let ipv6 = (|| {
+        let socket = Socket::new(Domain::IPV6, Type::DGRAM, Some(Protocol::UDP))?;
+        socket.set_only_v6(false)?;
+        socket.set_reuse_address(true)?;
+        socket.set_nonblocking(true)?;
+        socket.bind(&SockAddr::from("[::]:0".parse::<SocketAddr>().unwrap()))?;
+        let socket: std::net::UdpSocket = socket.into();
+        UdpSocket::from_std(socket)
+    })();
+    match ipv6 {
+        Ok(socket) => Ok(socket),
+        Err(ipv6_error) => UdpSocket::bind("0.0.0.0:0").await.map_err(|_| ipv6_error),
+    }
+}
+
+fn map_v4_for_dual_stack(address: SocketAddr, local: SocketAddr) -> SocketAddr {
+    match (address, local) {
+        (SocketAddr::V4(v4), SocketAddr::V6(_)) => SocketAddr::V6(std::net::SocketAddrV6::new(
+            v4.ip().to_ipv6_mapped(),
+            v4.port(),
+            0,
+            0,
+        )),
+        _ => address,
+    }
+}
+
+fn normalize_v4_mapped(address: SocketAddr) -> SocketAddr {
+    match address {
+        SocketAddr::V6(v6) => v6
+            .ip()
+            .to_ipv4_mapped()
+            .map(|ip| SocketAddr::new(ip.into(), v6.port()))
+            .unwrap_or(address),
+        _ => address,
+    }
 }
 
 /// Encode UDP packet (simple format)
@@ -522,7 +649,7 @@ mod tests {
             let (_tx, mut reader) = reader_with_bytes(&request).await;
             let (is_connect, target) = read_initial_request(&mut reader).await.unwrap();
             assert_eq!(is_connect, flag == 1);
-            assert_eq!(target, "127.0.0.1:5353".parse().unwrap());
+            assert_eq!(target, vec!["127.0.0.1:5353".parse().unwrap()]);
         }
     }
 
@@ -541,8 +668,100 @@ mod tests {
         packet.extend_from_slice(b"udp");
         let (_tx, mut reader) = reader_with_bytes(&packet).await;
         let (addr, payload) = read_udp_packet_non_connect(&mut reader).await.unwrap();
-        assert_eq!(addr, "127.0.0.1:5353".parse().unwrap());
+        assert_eq!(addr, vec!["127.0.0.1:5353".parse().unwrap()]);
         assert_eq!(payload, b"udp");
+    }
+
+    #[tokio::test]
+    async fn udp_send_tries_next_address_only_after_local_error() {
+        let receiver = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let sender = UdpSocket::bind("0.0.0.0:0").await.unwrap();
+        let target = receiver.local_addr().unwrap();
+        let sent =
+            send_udp_to_candidates(&sender, b"packet", &["[::1]:9".parse().unwrap(), target])
+                .await
+                .unwrap();
+        assert_eq!(sent, 6);
+        let mut buf = [0; 16];
+        let (len, _) = receiver.recv_from(&mut buf).await.unwrap();
+        assert_eq!(&buf[..len], b"packet");
+    }
+
+    #[tokio::test]
+    async fn udp_send_preserves_empty_datagrams() {
+        let receiver = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let sender = UdpSocket::bind("0.0.0.0:0").await.unwrap();
+        let sent = send_udp_to_candidates(&sender, b"", &[receiver.local_addr().unwrap()])
+            .await
+            .unwrap();
+        assert_eq!(sent, 0);
+        let mut buf = [0; 1];
+        let (len, _) = receiver.recv_from(&mut buf).await.unwrap();
+        assert_eq!(len, 0);
+    }
+
+    #[tokio::test]
+    async fn dual_stack_socket_sends_to_ipv4_candidates() {
+        let relay = bind_dual_stack_udp().await.unwrap();
+        let receiver = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        send_udp_to_candidates(&relay, b"v4", &[receiver.local_addr().unwrap()])
+            .await
+            .unwrap();
+        let mut buf = [0; 8];
+        let (len, _) = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            receiver.recv_from(&mut buf),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(&buf[..len], b"v4");
+    }
+
+    #[tokio::test]
+    async fn connected_udp_socket_filters_other_peers() {
+        let expected = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let other = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let relay = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let relay_addr = relay.local_addr().unwrap();
+        connect_udp_to_any(&relay, &[expected.local_addr().unwrap()])
+            .await
+            .unwrap();
+        expected.send_to(b"expected", relay_addr).await.unwrap();
+        other.send_to(b"filtered", relay_addr).await.unwrap();
+
+        let mut buf = [0; 32];
+        let (len, _) =
+            tokio::time::timeout(std::time::Duration::from_secs(1), relay.recv_from(&mut buf))
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(&buf[..len], b"expected");
+    }
+
+    #[tokio::test]
+    async fn connected_udp_tries_next_candidate_after_local_family_error() {
+        let receiver = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let relay = UdpSocket::bind("0.0.0.0:0").await.unwrap();
+        let candidates = connect_udp_to_any(
+            &relay,
+            &["[::1]:9".parse().unwrap(), receiver.local_addr().unwrap()],
+        )
+        .await
+        .unwrap();
+        assert_eq!(candidates[0], receiver.local_addr().unwrap());
+        send_udp_connected_candidates(&relay, b"fallback", &candidates)
+            .await
+            .unwrap();
+        let mut buf = [0; 16];
+        let (len, _) = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            receiver.recv_from(&mut buf),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(&buf[..len], b"fallback");
     }
 
     #[test]

@@ -26,12 +26,8 @@ async fn test_synack_success() {
     let server_session = Arc::new(Session::new_server(server_read, server_write, padding));
 
     // Start background tasks
-    let client_clone = client_session.clone();
-    tokio::spawn(async move {
-        if let Err(e) = client_clone.recv_loop().await {
-            tracing::error!("Client recv_loop error: {}", e);
-        }
-    });
+    client_session.clone().start_client().await.unwrap();
+    client_session.disable_buffering();
 
     let server_clone = server_session.clone();
     tokio::spawn(async move {
@@ -107,12 +103,8 @@ async fn test_synack_timeout() {
     ));
 
     // Start only client recv_loop (no server to respond)
-    let client_clone = client_session.clone();
-    tokio::spawn(async move {
-        if let Err(e) = client_clone.recv_loop().await {
-            tracing::error!("Client recv_loop error: {}", e);
-        }
-    });
+    client_session.clone().start_client().await.unwrap();
+    client_session.disable_buffering();
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -162,12 +154,8 @@ async fn test_synack_error_message() {
     let server_session = Arc::new(Session::new_server(server_read, server_write, padding));
 
     // Start background tasks
-    let client_clone = client_session.clone();
-    tokio::spawn(async move {
-        if let Err(e) = client_clone.recv_loop().await {
-            tracing::error!("Client recv_loop error: {}", e);
-        }
-    });
+    client_session.clone().start_client().await.unwrap();
+    client_session.disable_buffering();
 
     let server_clone = server_session.clone();
     tokio::spawn(async move {

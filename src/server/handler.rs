@@ -71,7 +71,7 @@ impl StreamHandler for TcpProxyHandler {
             );
 
             // Check if this is a UDP over TCP request
-            if destination.addr.contains("udp-over-tcp.arpa") {
+            if let Some(legacy_v1) = uot_version(&destination.addr) {
                 tracing::debug!("[Proxy] Detected UDP over TCP request");
                 if peer_version >= 2 {
                     tracing::debug!(
@@ -84,7 +84,7 @@ impl StreamHandler for TcpProxyHandler {
                         return Err(e);
                     }
                 }
-                crate::server::udp_proxy::handle_udp_over_tcp(stream).await
+                crate::server::udp_proxy::handle_udp_over_tcp(stream, legacy_v1).await
             } else {
                 // Regular TCP proxy
                 proxy_tcp_connection_with_synack_internal(
@@ -97,6 +97,16 @@ impl StreamHandler for TcpProxyHandler {
                 .await
             }
         })
+    }
+}
+
+fn uot_version(domain: &str) -> Option<bool> {
+    if domain.eq_ignore_ascii_case(crate::client::udp_client::UDP_OVER_TCP_V1_MAGIC_ADDR) {
+        Some(true)
+    } else if domain.eq_ignore_ascii_case(crate::client::udp_client::UDP_OVER_TCP_MAGIC_ADDR) {
+        Some(false)
+    } else {
+        None
     }
 }
 
@@ -419,7 +429,7 @@ async fn proxy_tcp_connection_data_forwarding(
         stream_id
     );
     let bytes_to_outbound_clone = Arc::clone(&bytes_to_outbound);
-    let task1 = tokio::spawn(async move {
+    let mut task1 = tokio::spawn(async move {
         tracing::debug!("[Proxy-Task1] Task started for stream {}", stream_id);
 
         // 获取 reader 的引用（无需锁整个 stream）
@@ -491,7 +501,7 @@ async fn proxy_tcp_connection_data_forwarding(
         stream_id
     );
     let bytes_to_client_clone = Arc::clone(&bytes_to_client);
-    let task2 = tokio::spawn(async move {
+    let mut task2 = tokio::spawn(async move {
         tracing::debug!("[Proxy-Task2] Task started for stream {}", stream_id);
         let mut buf = vec![0u8; 8192];
         let mut iteration = 0u64;
@@ -547,6 +557,14 @@ async fn proxy_tcp_connection_data_forwarding(
             );
         }
 
+        if let Err(error) = stream_for_write.send_fin().await {
+            tracing::debug!(
+                stream_id,
+                "[Proxy-Task2] Failed to queue stream FIN: {}",
+                error
+            );
+        }
+
         tracing::debug!(
             "[Proxy-Task2] Task completed for stream {} after {} iterations",
             stream_id,
@@ -554,12 +572,30 @@ async fn proxy_tcp_connection_data_forwarding(
         );
     });
 
-    // 等待两个任务完成
-    tracing::debug!(
-        "[Proxy] Waiting for tasks to complete for stream {}",
-        stream_id
-    );
-    let _ = tokio::join!(task1, task2);
+    // Supervise both directions. If the client half-closes its stream, finish
+    // writing its queued bytes to TCP, then allow up to one second for the TCP
+    // peer's already-buffered response tail to reach the stream.
+    tokio::select! {
+        result = &mut task1 => {
+            if let Err(error) = result {
+                tracing::debug!(stream_id, "[Proxy] Stream → TCP task ended: {}", error);
+            }
+            if timeout(Duration::from_secs(1), &mut task2).await.is_err() {
+                task2.abort();
+                let _ = task2.await;
+                if let Err(error) = stream.send_fin().await {
+                    tracing::debug!(stream_id, "[Proxy] Failed to queue FIN after TCP tail timeout: {}", error);
+                }
+            }
+        }
+        result = &mut task2 => {
+            if let Err(error) = result {
+                tracing::debug!(stream_id, "[Proxy] TCP → stream task ended: {}", error);
+            }
+            task1.abort();
+            let _ = task1.await;
+        }
+    }
     let outbound_bytes = bytes_to_outbound.load(Ordering::Relaxed);
     let client_bytes = bytes_to_client.load(Ordering::Relaxed);
 
@@ -580,6 +616,14 @@ async fn proxy_tcp_connection_data_forwarding(
 mod tests {
     use super::*;
     use tokio::net::TcpListener;
+
+    #[test]
+    fn uot_magic_domains_match_exactly() {
+        assert_eq!(uot_version("sp.udp-over-tcp.arpa"), Some(true));
+        assert_eq!(uot_version("SP.V2.UDP-OVER-TCP.ARPA"), Some(false));
+        assert_eq!(uot_version("not-sp.v2.udp-over-tcp.arpa"), None);
+        assert_eq!(uot_version("sp.v2.udp-over-tcp.arpa.attacker.test"), None);
+    }
 
     #[tokio::test]
     async fn connect_to_any_tries_later_address_after_refusal() {

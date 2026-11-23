@@ -35,9 +35,6 @@ async fn test_udp_over_tcp_roundtrip() -> Result<()> {
         loop {
             match echo_socket.recv_from(&mut buf).await {
                 Ok((len, peer)) => {
-                    if len == 0 {
-                        continue;
-                    }
                     let _ = echo_socket.send_to(&buf[..len], peer).await;
                 }
                 Err(e) => {
@@ -75,6 +72,15 @@ async fn test_udp_over_tcp_roundtrip() -> Result<()> {
         &buf[..recv_len],
         message,
         "UDP response should match request"
+    );
+
+    app_socket.send_to(&[], proxy_addr).await?;
+    let empty_len = timeout(Duration::from_secs(5), app_socket.recv_from(&mut buf))
+        .await??
+        .0;
+    assert_eq!(
+        empty_len, 0,
+        "empty UDP datagram should round-trip as empty"
     );
 
     // Cleanup
@@ -156,5 +162,56 @@ async fn test_udp_over_tcp_non_connect_roundtrip() -> Result<()> {
 
     server_task.abort();
     echo_task.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_udp_over_tcp_legacy_v1_roundtrip() -> Result<()> {
+    let config = new_test_config()?;
+    let server = create_test_server(&config).await?;
+    let server_addr = config.server_addr.clone();
+    let server_task = tokio::spawn(async move {
+        let _ = server.listen(&server_addr).await;
+    });
+    sleep(Duration::from_millis(300)).await;
+
+    let echo_socket = UdpSocket::bind("127.0.0.1:0").await?;
+    let echo_addr = echo_socket.local_addr()?;
+    let echo_task = tokio::spawn(async move {
+        let mut buf = [0u8; 2048];
+        while let Ok((len, peer)) = echo_socket.recv_from(&mut buf).await {
+            let _ = echo_socket.send_to(&buf[..len], peer).await;
+        }
+    });
+
+    let client = create_test_client(&config).await?;
+    let (stream, _session) = client
+        .create_proxy_stream(("sp.udp-over-tcp.arpa".to_string(), 0))
+        .await?;
+    // Legacy v1 has no initial request header: each packet begins with its
+    // destination address followed by the length and payload.
+    let mut wire = vec![0x00];
+    wire.extend_from_slice(
+        &echo_addr
+            .ip()
+            .to_string()
+            .parse::<std::net::Ipv4Addr>()?
+            .octets(),
+    );
+    wire.extend_from_slice(&echo_addr.port().to_be_bytes());
+    wire.extend_from_slice(&4u16.to_be_bytes());
+    wire.extend_from_slice(b"v1!!");
+    stream.send_data(Bytes::from(wire)).await?;
+
+    let mut reader = stream.reader().lock().await;
+    let mut response = [0u8; 1 + 4 + 2 + 2 + 4];
+    timeout(Duration::from_secs(5), reader.read_exact(&mut response)).await??;
+    assert_eq!(response[0], 0x00);
+    assert_eq!(u16::from_be_bytes([response[7], response[8]]), 4);
+    assert_eq!(&response[9..], b"v1!!");
+
+    server_task.abort();
+    echo_task.abort();
+    drop(client);
     Ok(())
 }

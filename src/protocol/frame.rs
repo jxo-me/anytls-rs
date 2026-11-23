@@ -4,6 +4,8 @@ use bytes::Bytes;
 pub const HEADER_OVERHEAD_SIZE: usize = 7;
 /// Maximum payload length encoded by the frame header's unsigned 16-bit field.
 pub const MAX_FRAME_PAYLOAD_SIZE: usize = u16::MAX as usize;
+/// Cap payloads on non-data commands to bound control-plane parsing and writes.
+pub const MAX_CONTROL_PAYLOAD_SIZE: usize = 4096;
 
 /// Command types for AnyTLS protocol frames
 #[repr(u8)]

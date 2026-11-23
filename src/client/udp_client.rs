@@ -14,6 +14,8 @@ const MAX_UDP_PACKET_SIZE: usize = 65535;
 
 /// Magic address for UDP over TCP v2
 pub const UDP_OVER_TCP_MAGIC_ADDR: &str = "sp.v2.udp-over-tcp.arpa";
+/// Legacy UoT v1 marker, which carries the destination in every packet.
+pub const UDP_OVER_TCP_V1_MAGIC_ADDR: &str = "sp.udp-over-tcp.arpa";
 
 impl Client {
     /// Create a UDP over TCP proxy connection
@@ -165,7 +167,7 @@ async fn udp_to_stream(
         stream_id
     );
 
-    let mut buf = vec![0u8; MAX_UDP_PACKET_SIZE];
+    let mut buf = vec![0u8; MAX_UDP_PACKET_SIZE + 1];
 
     loop {
         // Receive from local UDP
@@ -176,6 +178,11 @@ async fn udp_to_stream(
                 return Err(AnyTlsError::Io(e));
             }
         };
+        if len > MAX_UDP_PACKET_SIZE {
+            return Err(AnyTlsError::Protocol(
+                "truncated or oversized UDP datagram".into(),
+            ));
+        }
 
         {
             let mut guard = last_peer.lock().await;
@@ -229,11 +236,6 @@ async fn stream_to_udp(
         };
 
         drop(reader_guard);
-
-        if payload.is_empty() {
-            tracing::debug!("[UDP Client] Empty packet, stream might be closed");
-            break;
-        }
 
         tracing::trace!("[UDP Client] Stream → UDP: {} bytes", payload.len());
 
