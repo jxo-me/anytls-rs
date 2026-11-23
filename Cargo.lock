@@ -54,7 +54,6 @@ dependencies = [
  "rcgen",
  "rustls",
  "rustls-pemfile",
- "serde",
  "sha2",
  "socket2",
  "tempfile",

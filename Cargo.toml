@@ -33,9 +33,6 @@ tokio-rustls = "0.26.6"
 rcgen = "0.14.10"       # Certificate generation
 rustls-pemfile = "2"
 
-# 序列化
-serde = { version = "1.0.229", features = ["derive"] }
-
 # 网络协议
 bytes = "1.12.2"
 tokio-util = { version = "0.7.20", features = ["codec"] }
