@@ -167,7 +167,7 @@ impl AsyncRead for Stream {
         let reader = Arc::clone(&self.reader);
 
         // 创建读取 future
-        let mut read_fut = Box::pin(async move {
+        let mut read_fut = std::pin::pin!(async move {
             let mut reader_guard = reader.lock().await;
             let mut temp_buf = vec![0u8; remaining];
             let n = reader_guard.read(&mut temp_buf).await?;
