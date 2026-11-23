@@ -84,7 +84,7 @@ fn bench_stream_write(c: &mut Criterion) {
                 .iter(|| async {
                     let (stream, _session) = create_test_stream().await;
                     let data = Bytes::from(vec![0u8; size]);
-                    let _ = stream.send_data(data);
+                    let _ = stream.try_send_data(data);
                     black_box(&stream);
                 })
         });
@@ -102,12 +102,12 @@ fn bench_stream_read(c: &mut Criterion) {
                 .iter(|| async {
                     // Create StreamReader directly with pre-populated data
                     // This tests the read mechanism without needing Session integration
-                    let (receive_tx, receive_rx) = mpsc::unbounded_channel();
+                    let (receive_tx, receive_rx) = mpsc::channel(1);
                     let mut reader = StreamReader::new(1, receive_rx);
 
                     // Pre-populate with data
                     let data = Bytes::from(vec![0u8; size]);
-                    let _ = receive_tx.send(data);
+                    let _ = receive_tx.send(data).await;
 
                     // Now test reading - this should return data immediately
                     let mut buffer = vec![0u8; size];
@@ -127,12 +127,12 @@ fn bench_streamreader_read(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("read", size), size, |b, &size| {
             b.to_async(tokio::runtime::Runtime::new().unwrap())
                 .iter(|| async {
-                    let (receive_tx, receive_rx) = mpsc::unbounded_channel();
+                    let (receive_tx, receive_rx) = mpsc::channel(1);
                     let mut reader = StreamReader::new(1, receive_rx);
 
                     // Pre-populate with data
                     let data = Bytes::from(vec![0u8; size]);
-                    let _ = receive_tx.send(data);
+                    let _ = receive_tx.send(data).await;
 
                     let mut buffer = vec![0u8; size];
                     let _ = reader.read(&mut buffer).await;
@@ -151,7 +151,7 @@ fn bench_stream_concurrent_read_write(c: &mut Criterion) {
                 let (stream, _session) = create_test_stream().await;
 
                 // Create a separate StreamReader for read testing
-                let (read_tx, read_rx) = mpsc::unbounded_channel();
+                let (read_tx, read_rx) = mpsc::channel(100);
                 let mut read_reader = StreamReader::new(stream.id(), read_rx);
 
                 // Spawn concurrent write task
@@ -159,7 +159,7 @@ fn bench_stream_concurrent_read_write(c: &mut Criterion) {
                 let write_handle = tokio::spawn(async move {
                     for _ in 0..100 {
                         let data = Bytes::from(vec![0u8; 1024]);
-                        let _ = write_stream.send_data(data);
+                        let _ = write_stream.try_send_data(data);
                     }
                 });
 
@@ -168,7 +168,7 @@ fn bench_stream_concurrent_read_write(c: &mut Criterion) {
                     // Pre-populate with data for read testing
                     for _ in 0..100 {
                         let data = Bytes::from(vec![0u8; 1024]);
-                        let _ = read_tx.send(data);
+                        let _ = read_tx.send(data).await;
                     }
 
                     let mut buffer = vec![0u8; 1024];

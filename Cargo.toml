@@ -6,7 +6,6 @@ authors = ["Mickey <mickey@jxo.me>"]
 description = "Async TLS proxy with SOCKS5 support for privacy and security."
 license = "MIT"
 repository = "https://github.com/jxo-me/anytls-rs"
-homepage = "https://github.com/jxo-me/anytls-rs"
 documentation = "https://docs.rs/anytls-rs"
 keywords = ["anytls", "tls", "proxy", "socks5", "security"]
 categories = ["network-programming", "cryptography", "asynchronous"]
@@ -15,59 +14,61 @@ readme = "README.md"
 [dependencies]
 # 异步运行时
 # tokio = { version = "1.48", features = ["full"] }  # 完整功能（备用）
-tokio = { version = "1.48", features = [
-    "macros",       # #[tokio::main], #[tokio::test]
-    "rt-multi-thread",  # 多线程运行时
-    "io-util",      # AsyncReadExt, AsyncWriteExt
-    "io-std",       # 标准 IO
-    "net",          # TcpListener, TcpStream, UdpSocket
-    "sync",         # Mutex, RwLock, mpsc, oneshot, Notify
-    "time",         # sleep, interval, timeout, Duration
-    "signal",       # 信号处理
-    "fs",           # 文件系统操作
+tokio = { version = "1.54.1", features = [
+    "macros",          # #[tokio::main], #[tokio::test]
+    "rt-multi-thread", # 多线程运行时
+    "io-util",         # AsyncReadExt, AsyncWriteExt
+    "io-std",          # 标准 IO
+    "net",             # TcpListener, TcpStream, UdpSocket
+    "sync",            # Mutex, RwLock, mpsc, oneshot, Notify
+    "time",            # sleep, interval, timeout, Duration
+    "signal",          # 信号处理
+    "fs",              # 文件系统操作
 ] }
 
 # TLS
-rustls = "0.23"
-tokio-rustls = "0.26"
-rcgen = "0.14"  # Certificate generation
+rustls = "0.23.46"
+tokio-rustls = "0.26.6"
+rcgen = "0.14.10"       # Certificate generation
 rustls-pemfile = "2"
 
 # 序列化
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive"] }
 
 # 网络协议
-bytes = "1.10.1"
-tokio-util = { version = "0.7", features = ["codec"] }
+bytes = "1.12.2"
+tokio-util = { version = "0.7.20", features = ["codec"] }
 
 # 加密哈希
-sha2 = "0.10"
-md5 = "0.8"
+sha2 = "0.11.1"
+md5 = "0.8.1"
 
 # 随机数
-rand = "0.9"
+rand = "0.10.4"
 
 # 日志
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-once_cell = "1.21"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+once_cell = "1.21.4"
 socket2 = "0.6"
-trust-dns-resolver = { version = "0.23", default-features = false, features = ["tokio-runtime"] }
+trust-dns-resolver = { version = "0.23", default-features = false, features = [
+    "tokio-runtime",
+] }
 
 # 错误处理
-thiserror = "2.0"
-anyhow = "1.0"
+thiserror = "2.0.21"
+anyhow = "1.0.105"
 
 # 证书监控和分析
-notify = "8.2"
-x509-parser = "0.18"
-chrono = "0.4"
+notify = "9.0.0"
+x509-parser = "0.18.1"
+chrono = "0.4.45"
 
 [dev-dependencies]
-tokio-test = "0.4"
-tempfile = "3.8"
-base64 = "0.22"
-criterion = { version = "0.7", features = ["html_reports", "async_tokio"] }
+tokio-test = "0.4.6"
+tempfile = "3.27.0"
+base64 = "0.23.1"
+criterion = { version = "0.8.2", features = ["html_reports", "async_tokio"] }
 
 [[bench]]
 name = "session_bench"

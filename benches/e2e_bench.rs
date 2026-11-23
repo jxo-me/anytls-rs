@@ -73,7 +73,7 @@ fn bench_e2e_stream_open_and_send(c: &mut Criterion) {
 
                     // Send data
                     let data = Bytes::from(vec![0u8; size]);
-                    let _ = stream.send_data(data);
+                    let _ = stream.try_send_data(data);
 
                     black_box(&stream);
                 })
@@ -105,7 +105,7 @@ fn bench_e2e_multiple_streams_concurrent(c: &mut Criterion) {
                         // Send data on all streams concurrently
                         for stream in streams.iter() {
                             let data = Bytes::from(vec![0u8; 1024]);
-                            let _ = stream.send_data(data);
+                            let _ = stream.try_send_data(data);
                         }
 
                         black_box(streams);
@@ -239,7 +239,7 @@ fn bench_e2e_data_throughput(c: &mut Criterion) {
 
                         let data = Bytes::from(vec![0u8; size]);
                         for _ in 0..iters {
-                            let _ = stream.send_data(data.clone());
+                            let _ = stream.try_send_data(data.clone());
                         }
 
                         black_box(&stream);
@@ -279,7 +279,7 @@ fn bench_e2e_session_startup_and_streams(c: &mut Criterion) {
 
                 // Send some data
                 let data = Bytes::from(vec![0u8; 1024]);
-                let _ = stream.send_data(data);
+                let _ = stream.try_send_data(data);
 
                 black_box((client_session, server_session, stream));
             })

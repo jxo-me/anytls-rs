@@ -1,6 +1,6 @@
 //! UDP over TCP proxy implementation
 //!
-//! Implements sing-box udp-over-tcp v2 protocol (Connect format)
+//! Implements sing-box udp-over-tcp v2 protocol (Connect and non-Connect formats)
 //!
 //! # Protocol Format
 //!
@@ -10,11 +10,13 @@
 //! | u8 (=1)   | u8   | variable| u16be|
 //! ```
 //!
-//! ## Data packets (Connect format, isConnect=1):
+//! ## Connect data packets (isConnect=1):
 //! ```text
 //! | Length | Data     |
 //! | u16be  | variable |
 //! ```
+//!
+//! Non-Connect packets (isConnect=0) use the v1 per-packet address format.
 //!
 //! Reference: <https://github.com/SagerNet/sing-box/blob/dev-next/docs/configuration/shared/udp-over-tcp.md>
 
@@ -62,7 +64,7 @@ pub async fn handle_udp_over_tcp(stream: Arc<Stream>) -> Result<()> {
 
     // Step 1: Read initial request (contains target address)
     // Format: SOCKS5 address (ATYP + Address + Port)
-    let target_addr = match read_initial_request(&mut reader_guard).await {
+    let (is_connect, target_addr) = match read_initial_request(&mut reader_guard).await {
         Ok(addr) => addr,
         Err(e) => {
             tracing::error!("[UDP] Failed to read initial request: {}", e);
@@ -98,6 +100,7 @@ pub async fn handle_udp_over_tcp(stream: Arc<Stream>) -> Result<()> {
         result = stream_to_udp(
             &stream,
             &udp_socket,
+            is_connect,
             &target_addr,
             Arc::clone(&packets_stream_to_udp),
             Arc::clone(&bytes_stream_to_udp)
@@ -110,7 +113,7 @@ pub async fn handle_udp_over_tcp(stream: Arc<Stream>) -> Result<()> {
         result = udp_to_stream(
             &stream,
             &udp_socket,
-            &target_addr,
+            is_connect,
             Arc::clone(&packets_udp_to_stream),
             Arc::clone(&bytes_udp_to_stream)
         ) => {
@@ -148,7 +151,7 @@ pub async fn handle_udp_over_tcp(stream: Arc<Stream>) -> Result<()> {
 /// ```
 ///
 /// Returns the target SocketAddr
-async fn read_initial_request(reader: &mut StreamReader) -> Result<SocketAddr> {
+async fn read_initial_request(reader: &mut StreamReader) -> Result<(bool, SocketAddr)> {
     // Read isConnect (1 byte)
     let mut is_connect_buf = [0u8; 1];
     reader
@@ -158,15 +161,14 @@ async fn read_initial_request(reader: &mut StreamReader) -> Result<SocketAddr> {
 
     let is_connect = is_connect_buf[0];
 
-    if is_connect != 1 {
-        // We only support connect format (isConnect=1)
+    if is_connect > 1 {
         return Err(AnyTlsError::Protocol(format!(
-            "Unsupported UDP over TCP format: isConnect={}",
+            "Invalid UDP over TCP isConnect value: {}",
             is_connect
         )));
     }
 
-    tracing::debug!("[UDP] Using Connect format (isConnect=1)");
+    tracing::debug!(is_connect, "[UDP] Parsed UDP over TCP format");
 
     // Read ATYP (1 byte)
     let mut atyp_buf = [0u8; 1];
@@ -195,7 +197,7 @@ async fn read_initial_request(reader: &mut StreamReader) -> Result<SocketAddr> {
             let ip = std::net::Ipv4Addr::from(ip_buf);
             let port = u16::from_be_bytes(port_buf);
 
-            Ok(SocketAddr::from((ip, port)))
+            Ok((is_connect == 1, SocketAddr::from((ip, port))))
         }
         0x04 => {
             // IPv6: 16 bytes IP + 2 bytes port
@@ -214,7 +216,7 @@ async fn read_initial_request(reader: &mut StreamReader) -> Result<SocketAddr> {
             let ip = std::net::Ipv6Addr::from(ip_buf);
             let port = u16::from_be_bytes(port_buf);
 
-            Ok(SocketAddr::from((ip, port)))
+            Ok((is_connect == 1, SocketAddr::from((ip, port))))
         }
         0x03 => {
             // Domain: length (1 byte) + domain + 2 bytes port
@@ -249,7 +251,7 @@ async fn read_initial_request(reader: &mut StreamReader) -> Result<SocketAddr> {
             // Resolve domain name with caching and timeout
             let addr = resolve_host_with_cache(&domain, port).await?;
 
-            Ok(addr)
+            Ok((is_connect == 1, addr))
         }
         _ => Err(AnyTlsError::Protocol(format!(
             "Unknown address type: {}",
@@ -260,11 +262,11 @@ async fn read_initial_request(reader: &mut StreamReader) -> Result<SocketAddr> {
 
 /// Stream → UDP: Read packets from Stream, decode and send to UDP
 ///
-/// Protocol: Each packet is Length (2 bytes BE) + Payload
-/// The payload is pure UDP data (target address already known from initial request)
+/// Connect packets contain Length + Payload; non-Connect packets also carry a destination.
 async fn stream_to_udp(
     stream: &Stream,
     udp: &UdpSocket,
+    is_connect: bool,
     target_addr: &SocketAddr,
     packets_counter: Arc<AtomicU64>,
     bytes_counter: Arc<AtomicU64>,
@@ -277,8 +279,14 @@ async fn stream_to_udp(
 
     loop {
         // Read one UDP packet (Length + Payload format)
-        let payload = match read_udp_packet(&mut reader_guard).await {
-            Ok(data) => data,
+        let (packet_target, payload) = match if is_connect {
+            read_udp_packet(&mut reader_guard)
+                .await
+                .map(|payload| (*target_addr, payload))
+        } else {
+            read_udp_packet_non_connect(&mut reader_guard).await
+        } {
+            Ok(packet) => packet,
             Err(e) => {
                 if e.to_string().contains("UnexpectedEof") || e.to_string().contains("EOF") {
                     tracing::debug!("[UDP] Stream closed (EOF), stopping Stream → UDP");
@@ -301,7 +309,7 @@ async fn stream_to_udp(
         );
 
         // Send to UDP (target address already known from initial request)
-        let sent = udp.send_to(&payload, target_addr).await?;
+        let sent = udp.send_to(&payload, packet_target).await?;
 
         if sent != payload.len() {
             tracing::warn!("[UDP] Partial UDP send: {} / {} bytes", sent, payload.len());
@@ -315,13 +323,11 @@ async fn stream_to_udp(
 
 /// UDP → Stream: Read from UDP, encode and send to Stream
 ///
-/// Protocol: Each packet is Length (2 bytes BE) + Payload
-/// The payload is pure UDP data (source address info might be embedded, but for simplicity
-/// we just send the data since the connection is already established)
+/// Connect packets contain Length + Payload; non-Connect packets include the source address.
 async fn udp_to_stream(
     stream: &Stream,
     udp: &UdpSocket,
-    _target_addr: &SocketAddr,
+    is_connect: bool,
     packets_counter: Arc<AtomicU64>,
     bytes_counter: Arc<AtomicU64>,
 ) -> Result<()> {
@@ -343,13 +349,15 @@ async fn udp_to_stream(
 
         tracing::trace!("[UDP] UDP → Stream: {} bytes from {}", len, addr);
 
-        // Encode: Length (2 bytes BE) + Payload
-        // Note: According to sing-box protocol, the payload is just the UDP data
-        // The source address info is not included in each packet (connection is established)
-        let packet = encode_udp_packet_simple(&buf[..len])?;
+        // Encode according to the negotiated UoT v2 mode.
+        let packet = if is_connect {
+            encode_udp_packet_simple(&buf[..len])?
+        } else {
+            encode_udp_packet_non_connect(addr, &buf[..len])?
+        };
 
         // Send to Stream using the send_data method
-        if let Err(e) = stream.send_data(packet) {
+        if let Err(e) = stream.send_data(packet).await {
             tracing::error!("[UDP] Failed to send to stream: {}", e);
             return Err(AnyTlsError::Protocol("Channel send failed".into()));
         }
@@ -393,6 +401,58 @@ async fn read_udp_packet(reader: &mut StreamReader) -> Result<Vec<u8>> {
     Ok(data)
 }
 
+/// Read one non-connect UoT v2 packet: address, port, length, payload.
+async fn read_udp_packet_non_connect(reader: &mut StreamReader) -> Result<(SocketAddr, Vec<u8>)> {
+    let mut atyp_buf = [0u8; 1];
+    reader
+        .read_exact(&mut atyp_buf)
+        .await
+        .map_err(AnyTlsError::Io)?;
+    let host = match atyp_buf[0] {
+        0x00 => {
+            let mut ip = [0u8; 4];
+            reader.read_exact(&mut ip).await.map_err(AnyTlsError::Io)?;
+            std::net::IpAddr::V4(ip.into()).to_string()
+        }
+        0x01 => {
+            let mut ip = [0u8; 16];
+            reader.read_exact(&mut ip).await.map_err(AnyTlsError::Io)?;
+            std::net::IpAddr::V6(ip.into()).to_string()
+        }
+        0x02 => {
+            let mut len = [0u8; 1];
+            reader.read_exact(&mut len).await.map_err(AnyTlsError::Io)?;
+            if len[0] == 0 {
+                return Err(AnyTlsError::Protocol("Invalid domain length".into()));
+            }
+            let mut domain = vec![0; len[0] as usize];
+            reader
+                .read_exact(&mut domain)
+                .await
+                .map_err(AnyTlsError::Io)?;
+            String::from_utf8(domain)
+                .map_err(|e| AnyTlsError::Protocol(format!("Invalid domain name: {e}")))?
+        }
+        atyp => {
+            return Err(AnyTlsError::Protocol(format!(
+                "Unknown UoT address type: {atyp}"
+            )));
+        }
+    };
+    let mut port_buf = [0u8; 2];
+    reader
+        .read_exact(&mut port_buf)
+        .await
+        .map_err(AnyTlsError::Io)?;
+    let port = u16::from_be_bytes(port_buf);
+    let addr = resolve_host_with_cache(&host, port).await?;
+    let payload = read_udp_packet(reader).await?;
+    if payload.is_empty() {
+        return Err(AnyTlsError::Protocol("Empty UDP packet".into()));
+    }
+    Ok((addr, payload))
+}
+
 /// Encode UDP packet (simple format)
 ///
 /// Format (sing-box v2 after initial request):
@@ -418,9 +478,81 @@ fn encode_udp_packet_simple(payload: &[u8]) -> Result<Bytes> {
     Ok(buf.freeze())
 }
 
+fn encode_udp_packet_non_connect(addr: SocketAddr, payload: &[u8]) -> Result<Bytes> {
+    if payload.len() > MAX_UDP_PACKET_SIZE {
+        return Err(AnyTlsError::Protocol(format!(
+            "UDP packet too large: {} bytes",
+            payload.len()
+        )));
+    }
+    let mut buf = BytesMut::with_capacity(1 + 16 + 2 + 2 + payload.len());
+    match addr {
+        SocketAddr::V4(addr) => {
+            buf.put_u8(0x00);
+            buf.put_slice(&addr.ip().octets());
+            buf.put_u16(addr.port());
+        }
+        SocketAddr::V6(addr) => {
+            buf.put_u8(0x01);
+            buf.put_slice(&addr.ip().octets());
+            buf.put_u16(addr.port());
+        }
+    }
+    buf.put_u16(payload.len() as u16);
+    buf.put_slice(payload);
+    Ok(buf.freeze())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::mpsc;
+
+    async fn reader_with_bytes(data: &[u8]) -> (mpsc::Sender<Bytes>, StreamReader) {
+        let (tx, rx) = mpsc::channel(2);
+        tx.send(Bytes::copy_from_slice(data)).await.unwrap();
+        (tx, StreamReader::new(7, rx))
+    }
+
+    #[tokio::test]
+    async fn test_initial_request_accepts_connect_and_non_connect() {
+        for flag in [0, 1] {
+            let mut request = vec![flag, 0x01, 127, 0, 0, 1];
+            request.extend_from_slice(&5353u16.to_be_bytes());
+            let (_tx, mut reader) = reader_with_bytes(&request).await;
+            let (is_connect, target) = read_initial_request(&mut reader).await.unwrap();
+            assert_eq!(is_connect, flag == 1);
+            assert_eq!(target, "127.0.0.1:5353".parse().unwrap());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_initial_request_rejects_unknown_flag() {
+        let (_tx, mut reader) = reader_with_bytes(&[2, 1, 127, 0, 0, 1, 0, 53]).await;
+        assert!(read_initial_request(&mut reader).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_non_connect_packet_decodes_address_and_payload() {
+        // UoT address type 0 means IPv4; the datagram length covers the payload.
+        let mut packet = vec![0x00, 127, 0, 0, 1];
+        packet.extend_from_slice(&5353u16.to_be_bytes());
+        packet.extend_from_slice(&3u16.to_be_bytes());
+        packet.extend_from_slice(b"udp");
+        let (_tx, mut reader) = reader_with_bytes(&packet).await;
+        let (addr, payload) = read_udp_packet_non_connect(&mut reader).await.unwrap();
+        assert_eq!(addr, "127.0.0.1:5353".parse().unwrap());
+        assert_eq!(payload, b"udp");
+    }
+
+    #[test]
+    fn test_non_connect_response_encodes_source_address() {
+        let encoded =
+            encode_udp_packet_non_connect("127.0.0.1:5353".parse().unwrap(), b"udp").unwrap();
+        assert_eq!(&encoded[..7], &[0x00, 127, 0, 0, 1, 0x14, 0xe9]);
+        assert_eq!(u16::from_be_bytes([encoded[7], encoded[8]]), 3);
+        assert_eq!(&encoded[9..], b"udp");
+    }
 
     #[test]
     fn test_read_udp_packet_length() {

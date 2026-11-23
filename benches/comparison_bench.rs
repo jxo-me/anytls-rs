@@ -246,7 +246,7 @@ fn bench_critical_path_operations(c: &mut Criterion) {
 
                 let (stream, _synack_rx) = session.open_stream().await.unwrap();
                 let data = Bytes::from(vec![0u8; 1024]);
-                let _ = stream.send_data(data);
+                let _ = stream.try_send_data(data);
 
                 black_box(&stream);
             })

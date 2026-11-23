@@ -19,7 +19,7 @@ pub struct StreamReader {
 
     /// 从 Session 接收数据的 channel
     /// 注意：recv() 是 async 方法，需要 &mut self
-    reader_rx: mpsc::UnboundedReceiver<Bytes>,
+    reader_rx: mpsc::Receiver<Bytes>,
 
     /// 缓冲不完整的数据
     /// 当 read buffer 小于接收到的数据时使用
@@ -31,7 +31,7 @@ pub struct StreamReader {
 
 impl StreamReader {
     /// 创建新的 StreamReader
-    pub fn new(id: u32, reader_rx: mpsc::UnboundedReceiver<Bytes>) -> Self {
+    pub fn new(id: u32, reader_rx: mpsc::Receiver<Bytes>) -> Self {
         Self {
             id,
             reader_rx,
@@ -152,11 +152,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_stream_reader_basic() {
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(4);
         let mut reader = StreamReader::new(1, rx);
 
         // 发送数据
-        tx.send(Bytes::from("hello")).unwrap();
+        tx.send(Bytes::from("hello")).await.unwrap();
 
         // 读取数据
         let mut buf = vec![0u8; 10];
@@ -168,11 +168,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_stream_reader_buffering() {
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(4);
         let mut reader = StreamReader::new(1, rx);
 
         // 发送较大的数据
-        tx.send(Bytes::from("hello world")).unwrap();
+        tx.send(Bytes::from("hello world")).await.unwrap();
 
         // 分两次读取
         let mut buf = vec![0u8; 5];
@@ -192,7 +192,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_stream_reader_eof() {
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(4);
         let mut reader = StreamReader::new(1, rx);
 
         // 关闭 channel
@@ -207,13 +207,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_stream_reader_multiple_chunks() {
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(4);
         let mut reader = StreamReader::new(1, rx);
 
         // 发送多个数据块
-        tx.send(Bytes::from("chunk1")).unwrap();
-        tx.send(Bytes::from("chunk2")).unwrap();
-        tx.send(Bytes::from("chunk3")).unwrap();
+        tx.send(Bytes::from("chunk1")).await.unwrap();
+        tx.send(Bytes::from("chunk2")).await.unwrap();
+        tx.send(Bytes::from("chunk3")).await.unwrap();
 
         // 关闭 channel 以触发 EOF
         drop(tx);
@@ -231,5 +231,28 @@ mod tests {
         }
 
         assert_eq!(total, b"chunk1chunk2chunk3");
+    }
+
+    #[tokio::test]
+    async fn test_bounded_reader_queue_applies_backpressure() {
+        let (tx, rx) = mpsc::channel(1);
+        let mut reader = StreamReader::new(1, rx);
+        tx.send(Bytes::from_static(b"first")).await.unwrap();
+
+        let blocked_send = tokio::spawn(async move {
+            tx.send(Bytes::from_static(b"second")).await.unwrap();
+        });
+        tokio::task::yield_now().await;
+        assert!(
+            !blocked_send.is_finished(),
+            "send should wait for reader capacity"
+        );
+
+        let mut buf = [0u8; 8];
+        let n = reader.read(&mut buf).await.unwrap();
+        assert_eq!(&buf[..n], b"first");
+        blocked_send.await.unwrap();
+        let n = reader.read(&mut buf).await.unwrap();
+        assert_eq!(&buf[..n], b"second");
     }
 }

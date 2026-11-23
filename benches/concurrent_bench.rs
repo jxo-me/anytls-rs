@@ -150,7 +150,7 @@ fn bench_concurrent_stream_data_send(c: &mut Criterion) {
                                 tokio::spawn(async move {
                                     let data = Bytes::from(vec![0u8; data_size]);
                                     for _ in 0..10 {
-                                        let _ = stream.send_data(data.clone());
+                                        let _ = stream.try_send_data(data.clone());
                                     }
                                     stream
                                 })

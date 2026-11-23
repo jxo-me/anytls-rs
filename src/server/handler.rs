@@ -481,9 +481,12 @@ async fn proxy_tcp_connection_data_forwarding(
                 }
             };
 
-            // 写入 stream（使用 send_data，完全无锁！）
+            // 写入 stream；有界队列满时会等待消费端释放容量。
             use bytes::Bytes;
-            if let Err(e) = stream_for_write.send_data(Bytes::copy_from_slice(&buf[..n])) {
+            if let Err(e) = stream_for_write
+                .send_data(Bytes::copy_from_slice(&buf[..n]))
+                .await
+            {
                 tracing::error!(
                     "[Proxy-Task2] Stream write error (stream_id={}, iteration={}): {:?}",
                     stream_id,
